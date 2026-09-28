@@ -1,9 +1,20 @@
-"""Sarvam AI speech-to-text — optional, for Indian languages and code-mixed
-speech.
+"""Sarvam AI speech-to-text.
 
-The app's default is Android's on-device recogniser, which is free and keeps
-audio on the phone. This path exists for when she wants to log in Tamil or
-Hindi, where Sarvam is materially better.
+This is how voice logging transcribes. Android's on-device recogniser is free
+and keeps audio on the phone, but its generic language model mangles Indian
+food names, and a wrong transcript becomes a wrong log two steps later. Sarvam
+is trained on Indian and code-mixed speech, which is what actually gets spoken.
+
+Two details that are easy to get wrong and produce silent failures:
+
+  - The model must be `saarika:*`. `saaras:*` is the speech-to-TRANSLATE
+    endpoint's model; pointing this endpoint at it returns lower-quality,
+    differently-shaped output.
+  - The upload is declared `application/octet-stream`, not by its real type.
+    Android records AAC in an m4a container, which Sarvam decodes perfectly
+    well but rejects at the door: its content-type allowlist covers wav, mp3
+    and raw PCM but not m4a. Declaring the bytes as opaque gets them past the
+    check and transcribed correctly.
 """
 
 import logging
@@ -29,7 +40,7 @@ async def transcribe(
             response = await client.post(
                 STT_URL,
                 headers={"api-subscription-key": settings.sarvam_api_key},
-                files={"file": (filename, audio, "audio/wav")},
+                files={"file": (filename, audio, "application/octet-stream")},
                 data={
                     "model": settings.sarvam_stt_model,
                     "mode": "transcribe",
