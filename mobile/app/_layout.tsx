@@ -121,6 +121,10 @@ export default function RootLayout() {
               name="meal-edit"
               options={{ presentation: 'modal', animation: 'slide_from_bottom' }}
             />
+            <Stack.Screen
+              name="food-new"
+              options={{ presentation: 'modal', animation: 'slide_from_bottom' }}
+            />
           </Stack>
         </SafeAreaProvider>
       </QueryClientProvider>

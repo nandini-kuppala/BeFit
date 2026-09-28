@@ -65,6 +65,46 @@ class EstimatedFood(BaseModel):
     folate_ug: float = 0.0
 
 
+class CanonicalFood(BaseModel):
+    """The tidied-up name of what the user meant, before any lookup happens."""
+
+    canonical_name: str = Field(
+        description="Correctly spelled, singular, common name. 'pumpkin sed' -> 'Pumpkin seeds'"
+    )
+    is_food: bool = Field(description="False if the text does not name a food at all")
+    search_term: str = Field(
+        description="Best phrase to search a nutrition database with, in English"
+    )
+
+
+class WebNutrition(BaseModel):
+    """Per-100g values extracted from web search results."""
+
+    found: bool = Field(description="False if the snippets do not state nutrition data")
+    name: str
+    is_veg: bool = True
+    typical_portion_label: str = Field(description="e.g. '1 tbsp', '28 g (1 oz)'")
+    typical_portion_grams: float
+    source_note: str = Field(description="Which site the figures came from")
+    kcal: float
+    protein_g: float
+    fat_g: float
+    carbs_g: float
+    fibre_g: float = 0.0
+    sugar_g: float = 0.0
+    iron_mg: float = 0.0
+    calcium_mg: float = 0.0
+    zinc_mg: float = 0.0
+    magnesium_mg: float = 0.0
+    selenium_ug: float = 0.0
+    sodium_mg: float = 0.0
+    potassium_mg: float = 0.0
+    vit_c_mg: float = 0.0
+    vit_e_mg: float = 0.0
+    folate_ug: float = 0.0
+    omega3_mg: float = 0.0
+
+
 class BodyScan(BaseModel):
     weight_kg: float | None = None
     body_fat_pct: float | None = None
@@ -156,6 +196,99 @@ async def estimate_nutrition(food_name: str) -> tuple[Nutrients, EstimatedFood] 
         potassium_mg=result.potassium_mg,
         vit_c_mg=result.vit_c_mg,
         folate_ug=result.folate_ug,
+    )
+    return nutrients, result
+
+
+CANONICAL_SYSTEM = """You correct and normalise food names typed by a user who
+may misspell things or use Indian regional names.
+
+"pumpkin sed" -> "Pumpkin seeds". "chiken brest" -> "Chicken breast".
+"curd rice" -> "Curd rice" (already correct). "asdfgh" -> is_food false.
+
+Never substitute a different food: if the input is clearly pumpkin seeds, do not
+return sunflower seeds. Keep the user's intent, fix only spelling and wording."""
+
+
+async def canonicalise_food(text: str) -> CanonicalFood | None:
+    """Fix typos before anything is looked up.
+
+    Searching USDA for "pumpkin sed" returns "Bread, pumpkin"; searching it for
+    "Pumpkin seeds" returns pumpkin seeds. The correction has to happen before
+    the query leaves the building.
+    """
+    settings = get_settings()
+    try:
+        response = await _generate(
+            settings.gemini_utility_model,
+            f"User typed: {text!r}. Normalise it.",
+            schema=CanonicalFood,
+            system=CANONICAL_SYSTEM,
+        )
+        return response.parsed
+    except Exception as exc:
+        log.warning("Gemini canonicalise failed for %r: %s", text, exc)
+        return None
+
+
+WEB_SYSTEM = """You extract per-100g nutrition values from web search snippets.
+
+Rules:
+- Use only numbers stated in the snippets. Do not fill gaps from memory.
+- Snippets often quote a serving (1 oz, 28 g, 1 cup). Convert to per 100 g.
+- If the snippets are about a different food than the one asked for, set
+  found=false. A snippet about sunflower seeds does not answer a question about
+  pumpkin seeds.
+- If no usable numbers are present, set found=false. Returning nothing is better
+  than returning something invented.
+- Set 0.0 for any micronutrient the snippets do not mention."""
+
+
+async def extract_nutrition_from_web(
+    food_name: str, snippets: list[dict]
+) -> tuple[Nutrients, WebNutrition] | None:
+    """Read real published figures rather than recalling them."""
+    if not snippets:
+        return None
+
+    settings = get_settings()
+    blob = "\n\n".join(
+        f"[{s.get('title', '')}] {s.get('url', '')}\n{s.get('content', '')}"
+        for s in snippets
+    )
+    try:
+        response = await _generate(
+            settings.gemini_utility_model,
+            f"Food asked for: {food_name}\n\nSearch results:\n{blob}",
+            schema=WebNutrition,
+            system=WEB_SYSTEM,
+        )
+        result: WebNutrition = response.parsed
+    except Exception as exc:
+        log.warning("Gemini web extraction failed for %r: %s", food_name, exc)
+        return None
+
+    if result is None or not result.found or result.kcal <= 0:
+        return None
+
+    nutrients = Nutrients(
+        kcal=result.kcal,
+        protein_g=result.protein_g,
+        fat_g=result.fat_g,
+        carbs_g=result.carbs_g,
+        fibre_g=result.fibre_g,
+        sugar_g=result.sugar_g,
+        iron_mg=result.iron_mg,
+        calcium_mg=result.calcium_mg,
+        zinc_mg=result.zinc_mg,
+        magnesium_mg=result.magnesium_mg,
+        selenium_ug=result.selenium_ug,
+        sodium_mg=result.sodium_mg,
+        potassium_mg=result.potassium_mg,
+        vit_c_mg=result.vit_c_mg,
+        vit_e_mg=result.vit_e_mg,
+        folate_ug=result.folate_ug,
+        omega3_mg=result.omega3_mg,
     )
     return nutrients, result
 

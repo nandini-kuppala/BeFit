@@ -1,8 +1,10 @@
 import { request, requestForm } from './client';
 import type {
+  CustomFoodBody,
   DaySummary,
   FoodSummary,
   Meal,
+  SearchResponse,
   Nutrients,
   ParseResponse,
   ProfileResponse,
@@ -61,9 +63,28 @@ export const me = {
 
 export const food = {
   search: (query: string) =>
-    request<FoodSummary[]>(`/food/search?q=${encodeURIComponent(query)}`),
+    request<SearchResponse>(`/food/search?q=${encodeURIComponent(query)}`),
+  /** Walks the full chain — corrects typos, checks USDA, then the web. Slow
+   *  and costs an API call, so it is only ever triggered by an explicit tap. */
   resolve: (name: string) =>
     request<FoodSummary>('/food/resolve', { method: 'POST', body: { name } }),
+  createCustom: (body: CustomFoodBody) =>
+    request<FoodSummary>('/food/custom', { method: 'POST', body }),
+  barcode: (code: string) => request<FoodSummary>(`/food/barcode/${code}`),
+};
+
+export const voiceInput = {
+  /** Uploads a recording for Sarvam transcription. The audio is transcribed
+   *  server-side and discarded; only the text comes back. */
+  transcribe: async (uri: string) => {
+    const form = new FormData();
+    form.append('file', {
+      uri,
+      name: 'recording.m4a',
+      type: 'audio/m4a',
+    } as unknown as Blob);
+    return requestForm<{ transcript: string }>('/voice/transcribe', form);
+  },
 };
 
 export type LogItem = {

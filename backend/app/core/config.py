@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     usda_fdc_api_key: str
 
     sarvam_api_key: str | None = None
-    sarvam_stt_model: str = "saaras:v4"
+    sarvam_stt_model: str = "saarika:v2.5"
     google_vision_api_key: str | None = None
     tavily_api_key: str | None = None
 

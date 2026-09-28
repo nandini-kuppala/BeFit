@@ -151,8 +151,17 @@ export default function MealEdit() {
     0,
   );
 
-  const results = search.data ?? [];
+  const results = search.data?.results ?? [];
   const searching = debouncedQuery.trim().length >= 2;
+  const settled = searching && !search.isFetching;
+  const needsLookup = settled && !(search.data?.has_exact_match ?? false);
+
+  // Same escape hatches as the Log tab: a saved meal built from a near-miss
+  // food is wrong every single time it is logged, not just once.
+  const lookup = useMutation({
+    mutationFn: () => food.resolve(query.trim()),
+    onSuccess: (summary) => add(summary),
+  });
 
   return (
     <View style={{ flex: 1, backgroundColor: theme.canvas }}>
@@ -311,10 +320,41 @@ export default function MealEdit() {
                 </Card>
               </Pressable>
             ))}
-            {!search.isFetching && results.length === 0 ? (
-              <Text variant="small" tone="muted" center>
-                Nothing found. Try the Log food tab — it can look up new foods.
-              </Text>
+            {needsLookup ? (
+              <Card variant="tinted">
+                <Text variant="smallMedium">
+                  {results.length === 0
+                    ? `No match for "${query.trim()}"`
+                    : `Not quite "${query.trim()}"?`}
+                </Text>
+                <Text variant="small" tone="secondary" style={{ marginTop: 4 }}>
+                  Search nutrition databases and the web for it, or enter the numbers
+                  from the packet yourself.
+                </Text>
+                <View style={{ flexDirection: 'row', gap: spacing.sm, marginTop: spacing.md }}>
+                  <Button
+                    label="Look it up"
+                    size="sm"
+                    onPress={() => lookup.mutate()}
+                    loading={lookup.isPending}
+                    style={{ flex: 1 }}
+                  />
+                  <Button
+                    label="Enter it myself"
+                    variant="secondary"
+                    size="sm"
+                    onPress={() =>
+                      router.push(`/food-new?name=${encodeURIComponent(query.trim())}`)
+                    }
+                    style={{ flex: 1 }}
+                  />
+                </View>
+                {lookup.isError ? (
+                  <Text variant="small" style={{ color: semantic.danger, marginTop: spacing.sm }}>
+                    {(lookup.error as Error).message}
+                  </Text>
+                ) : null}
+              </Card>
             ) : null}
           </View>
         ) : null}

@@ -13,7 +13,8 @@ came from an AI estimate rather than a measured value.
 
 - **Food** — search, barcode and **voice logging** ("two idlis with sambar and a
   boiled egg"), with macros *and* 20+ micronutrients tracked against targets.
-  Saved meals log a whole breakfast in one tap.
+  Saved meals log a whole breakfast in one tap, and anything the lookup chain
+  can't find can be entered by hand from the packet.
 - **Training** — a weekly plan you can edit, per-exercise tick-off with sets and
   load, MET-based calorie estimates, streaks, a month calendar and volume trends.
 - **Body** — weight trend, body-composition capture by photo OCR, and an
@@ -28,16 +29,31 @@ came from an AI estimate rather than a measured value.
 
 ## Nutrition accuracy
 
-Food lookups walk a five-tier chain, cheapest and most trustworthy first:
+Food lookups walk a six-tier chain, cheapest and most trustworthy first:
 
 ```
-personal corrections → local Indian food DB → Open Food Facts
-                     → USDA FoodData Central → AI estimate
+personal entries → local Indian food DB → Open Food Facts
+                 → USDA FoodData Central → web search → AI estimate
 ```
 
 Anything resolved from a network tier is written back to the local database, so
-an unknown food costs a lookup once. Corrections you make become personal
-verified entries that outrank the original from then on.
+an unknown food costs a lookup once. Foods you enter by hand become personal
+verified entries that outrank everything else from then on.
+
+Two rules keep the chain from confidently returning the wrong food:
+
+**A local hit is only accepted when it genuinely matches.** Text search is
+term-based, so "pumpkin seeds" matches sesame seeds on the word "seeds".
+Matching is scored token-first — `0.75 × token_coverage + 0.25 × string_ratio`,
+with per-token fuzzy comparison so typos survive — and anything below the floor
+is dropped rather than shown. "pumpkin seeds" against "sesame seeds" scores
+0.52 and is rejected; "pumpkin sed" against "pumpkin seeds" scores 0.93 and is
+accepted.
+
+**An external hit is verified before it is trusted.** Spelling is corrected
+before the query leaves the building, because USDA answers "pumpkin sed" with
+"Bread, pumpkin". Whatever comes back is then scored against the query and
+discarded if it isn't actually the food that was asked for.
 
 The seeded database holds ~120 Indian foods from IFCT 2017 and the Anuvaad Indian
 Nutrient Databank. Recipe items were recomputed from raw ingredients with
@@ -55,7 +71,8 @@ raw-ingredient basis and are badly wrong if used directly.
 | State | TanStack Query · Zustand · Reanimated |
 | Backend | FastAPI · Python 3.11 · Beanie ODM · MongoDB Atlas |
 | AI | Google Gemini (structured output for food parsing and estimates) |
-| Nutrition | IFCT 2017 · Anuvaad INDB · USDA FDC · Open Food Facts |
+| Voice | Sarvam `saarika` speech-to-text, built for Indian and code-mixed speech |
+| Nutrition | IFCT 2017 · Anuvaad INDB · USDA FDC · Open Food Facts · Tavily web search |
 
 ## Running it
 

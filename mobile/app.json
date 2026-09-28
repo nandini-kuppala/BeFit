@@ -2,7 +2,7 @@
   "expo": {
     "name": "BeFit",
     "slug": "befit",
-    "version": "1.2.0",
+    "version": "1.3.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "scheme": "befit",
@@ -19,7 +19,7 @@
     },
     "android": {
       "package": "com.befit.app",
-      "versionCode": 3,
+      "versionCode": 4,
       "adaptiveIcon": {
         "backgroundColor": "#EDE9FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -44,7 +44,8 @@
             "usesCleartextTraffic": true
           }
         }
-      ]
+      ],
+      "expo-audio"
     ]
   }
 }

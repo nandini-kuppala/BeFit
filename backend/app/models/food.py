@@ -10,12 +10,13 @@ from app.models.nutrients import HouseholdUnit, Nutrients
 # Where the numbers came from. Ordered by the resolution chain in
 # services/nutrition.py — earlier is more trustworthy.
 FoodSource = Literal[
-    "personal",  # the user corrected this herself
+    "personal",  # the user corrected this herself, or entered it by hand
     "indb",  # Anuvaad Indian Nutrient Databank
     "ifct",  # Indian Food Composition Tables 2017
     "usda",  # USDA FoodData Central
     "openfoodfacts",  # barcode / packaged
-    "ai",  # Gemini estimate
+    "web",  # published figures read off a web search
+    "ai",  # Gemini estimate from memory
 ]
 
 # What the UI badge says. Never let an estimate look like a measured value.
@@ -27,6 +28,10 @@ CONFIDENCE_BY_SOURCE: dict[str, Confidence] = {
     "ifct": "verified",
     "usda": "database",
     "openfoodfacts": "database",
+    # Read off published pages rather than recalled, so better than a guess —
+    # but a model reading a web page is not a composition table, and the badge
+    # should not pretend otherwise.
+    "web": "estimated",
     "ai": "estimated",
 }
 

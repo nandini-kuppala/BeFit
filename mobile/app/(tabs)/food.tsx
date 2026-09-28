@@ -81,9 +81,12 @@ export default function FoodTab() {
     },
   });
 
-  const results = search.data ?? [];
+  const results = search.data?.results ?? [];
   const searching = query.trim().length >= 2;
-  const noResults = searching && !search.isFetching && results.length === 0;
+  const settled = searching && !search.isFetching && debouncedQuery === query.trim();
+  // Offer the escape hatches whenever nothing matched closely, not only when
+  // the list is empty — a near miss is still a wrong answer.
+  const needsLookup = settled && !(search.data?.has_exact_match ?? false);
 
   return (
     <ScrollView
@@ -260,20 +263,43 @@ export default function FoodTab() {
             </Pressable>
           ))}
 
-          {noResults ? (
+          {needsLookup ? (
             <Card variant="tinted">
-              <Text variant="smallMedium">Not in your database yet</Text>
-              <Text variant="small" tone="secondary" style={{ marginTop: 4 }}>
-                BeFit can look it up and remember it for next time.
+              <Text variant="smallMedium">
+                {results.length === 0
+                  ? `No match for "${query.trim()}"`
+                  : `Not quite "${query.trim()}"?`}
               </Text>
-              <Button
-                label={`Look up "${query.trim()}"`}
-                variant="secondary"
-                size="sm"
-                onPress={() => resolve.mutate()}
-                loading={resolve.isPending}
-                style={{ marginTop: spacing.md }}
-              />
+              <Text variant="small" tone="secondary" style={{ marginTop: 4 }}>
+                {results.length === 0
+                  ? 'BeFit can search nutrition databases and the web for it, then remember it for next time.'
+                  : 'Those are the closest names in your database. If none is right, search for the real thing or enter it yourself.'}
+              </Text>
+
+              <View style={{ flexDirection: 'row', gap: spacing.sm, marginTop: spacing.md }}>
+                <Button
+                  label="Look it up"
+                  size="sm"
+                  onPress={() => resolve.mutate()}
+                  loading={resolve.isPending}
+                  style={{ flex: 1 }}
+                />
+                <Button
+                  label="Enter it myself"
+                  variant="secondary"
+                  size="sm"
+                  onPress={() =>
+                    router.push(`/food-new?name=${encodeURIComponent(query.trim())}`)
+                  }
+                  style={{ flex: 1 }}
+                />
+              </View>
+
+              {resolve.isPending ? (
+                <Text variant="small" tone="muted" style={{ marginTop: spacing.sm }}>
+                  Checking USDA, then the web — this takes a few seconds.
+                </Text>
+              ) : null}
               {resolve.isError ? (
                 <Text variant="small" style={{ color: semantic.danger, marginTop: spacing.sm }}>
                   {(resolve.error as Error).message}

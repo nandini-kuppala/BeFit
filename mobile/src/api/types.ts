@@ -53,6 +53,32 @@ export type FoodSummary = {
   per_100g: Nutrients;
   household_units: HouseholdUnit[];
   default_grams: number;
+  /** 0-1, how well this answers the query. 1.0 for a non-search context. */
+  match_score: number;
+};
+
+export type SearchResponse = {
+  results: FoodSummary[];
+  /** False when nothing matched closely enough to trust — the UI should offer
+   *  lookup or manual entry rather than presenting near misses as answers. */
+  has_exact_match: boolean;
+  query: string;
+};
+
+/** What a hand-entered food looks like, in the terms a packet states them. */
+export type CustomFoodBody = {
+  name: string;
+  /** What the figures describe: 100 for a per-100g label, or the serving weight. */
+  basis_grams: number;
+  kcal: number;
+  protein_g: number;
+  fat_g: number;
+  carbs_g: number;
+  fibre_g: number;
+  sugar_g: number;
+  serving_label: string;
+  serving_grams: number | null;
+  is_veg: boolean;
 };
 
 export type LoggedFood = {

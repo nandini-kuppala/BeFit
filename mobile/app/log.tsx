@@ -19,6 +19,7 @@ import { Button } from '../src/components/Button';
 import { Card } from '../src/components/Card';
 import { ConfidenceDot } from '../src/components/ConfidenceDot';
 import { Icon } from '../src/components/Icon';
+import { Recorder } from '../src/components/Recorder';
 import { Text } from '../src/components/Text';
 import { radius, semantic, spacing, useTheme } from '../src/theme';
 
@@ -123,9 +124,18 @@ export default function LogScreen() {
         {!items ? (
           <>
             <Text variant="body" tone="secondary">
-              Say what you ate in plain words. Tap the mic on your keyboard — it works
-              offline and your voice never leaves the phone.
+              Say what you ate in plain words — press and hold the button, or type it
+              instead.
             </Text>
+
+            <Recorder
+              onTranscript={(transcript) =>
+                setText((current) =>
+                  current.trim() ? `${current.trim()} ${transcript}` : transcript,
+                )
+              }
+              onError={setError}
+            />
 
             <TextInput
               value={text}
@@ -133,7 +143,6 @@ export default function LogScreen() {
               placeholder="Two idlis with sambar…"
               placeholderTextColor={theme.textMuted}
               multiline
-              autoFocus
               style={[
                 styles.input,
                 { backgroundColor: theme.surface, borderColor: theme.border, color: theme.text },
