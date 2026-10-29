@@ -1,8 +1,6 @@
 import { useRouter } from 'expo-router';
 import { useMemo, useState } from 'react';
 import {
-  KeyboardAvoidingView,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -15,6 +13,7 @@ import { me } from '../src/api/befit';
 import type { Targets } from '../src/api/types';
 import { Button } from '../src/components/Button';
 import { Card } from '../src/components/Card';
+import { KeyboardScreen } from '../src/components/KeyboardScreen';
 import { Text } from '../src/components/Text';
 import { useAuth } from '../src/store/auth';
 import { radius, semantic, series, spacing, useTheme } from '../src/theme';
@@ -208,276 +207,267 @@ export default function Onboarding() {
 
   // ---- wizard --------------------------------------------------------
   return (
-    <KeyboardAvoidingView
-      style={{ flex: 1, backgroundColor: theme.canvas }}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-    >
-      <View style={{ paddingTop: insets.top + spacing.base, paddingHorizontal: spacing.xl }}>
-        <View style={styles.progress}>
-          {STEPS.map((label, index) => (
-            <View
-              key={label}
-              style={[
-                styles.progressBar,
-                {
-                  backgroundColor:
-                    index <= step ? theme.primary : theme.surfaceSunken,
-                },
-              ]}
-            />
-          ))}
+    <KeyboardScreen
+      contentContainerStyle={[styles.page, { paddingBottom: spacing.xl }]}
+      header={
+        <View style={{ paddingTop: insets.top + spacing.base, paddingHorizontal: spacing.xl }}>
+          <View style={styles.progress}>
+            {STEPS.map((label, index) => (
+              <View
+                key={label}
+                style={[
+                  styles.progressBar,
+                  {
+                    backgroundColor:
+                      index <= step ? theme.primary : theme.surfaceSunken,
+                  },
+                ]}
+              />
+            ))}
+          </View>
+          <Text variant="caption" tone="muted" style={{ marginTop: spacing.md }}>
+            Step {step + 1} of {STEPS.length} · {STEPS[step]}
+          </Text>
         </View>
-        <Text variant="caption" tone="muted" style={{ marginTop: spacing.md }}>
-          Step {step + 1} of {STEPS.length} · {STEPS[step]}
-        </Text>
-      </View>
-
-      <ScrollView
-        contentContainerStyle={[styles.page, { paddingBottom: spacing.xl }]}
-        keyboardShouldPersistTaps="handled"
-      >
-        {step === 0 && (
-          <>
-            <Text variant="h1" style={styles.heading}>
-              First, the basics
-            </Text>
-            <View style={styles.field}>
-              <Text variant="caption" tone="muted">What should I call you?</Text>
-              <TextInput
-                value={name}
-                onChangeText={setName}
-                placeholder="Your name"
-                placeholderTextColor={theme.textMuted}
-                style={inputStyle}
-              />
-            </View>
-            <View style={styles.field}>
-              <Text variant="caption" tone="muted">Age</Text>
-              <TextInput
-                value={age}
-                onChangeText={setAge}
-                placeholder="21"
-                placeholderTextColor={theme.textMuted}
-                keyboardType="number-pad"
-                style={inputStyle}
-              />
-            </View>
-            <View style={styles.field}>
-              <Text variant="caption" tone="muted">Sex</Text>
-              <View style={styles.chipRow}>
-                {(['female', 'male', 'other'] as const).map((value) => (
-                  <Chip
-                    key={value}
-                    label={value[0].toUpperCase() + value.slice(1)}
-                    selected={sex === value}
-                    onPress={() => setSex(value)}
-                  />
-                ))}
-              </View>
-              <Text variant="small" tone="muted">
-                Used for the BMR equation and iron targets — both differ meaningfully.
-              </Text>
-            </View>
-          </>
-        )}
-
-        {step === 1 && (
-          <>
-            <Text variant="h1" style={styles.heading}>
-              Where you are, where you're going
-            </Text>
-            <View style={styles.field}>
-              <Text variant="caption" tone="muted">Height (cm)</Text>
-              <TextInput
-                value={height}
-                onChangeText={setHeight}
-                placeholder="158"
-                placeholderTextColor={theme.textMuted}
-                keyboardType="decimal-pad"
-                style={inputStyle}
-              />
-            </View>
-            <View style={styles.field}>
-              <Text variant="caption" tone="muted">Current weight (kg)</Text>
-              <TextInput
-                value={weight}
-                onChangeText={setWeight}
-                placeholder="65"
-                placeholderTextColor={theme.textMuted}
-                keyboardType="decimal-pad"
-                style={inputStyle}
-              />
-            </View>
-            <View style={styles.field}>
-              <Text variant="caption" tone="muted">Goal weight (kg)</Text>
-              <TextInput
-                value={goalWeight}
-                onChangeText={setGoalWeight}
-                placeholder="55"
-                placeholderTextColor={theme.textMuted}
-                keyboardType="decimal-pad"
-                style={inputStyle}
-              />
-            </View>
-          </>
-        )}
-
-        {step === 2 && (
-          <>
-            <Text variant="h1" style={styles.heading}>
-              How active are you?
-            </Text>
-            <Text variant="body" tone="secondary" style={styles.sub}>
-              Count everything — your commute and your job, not just the gym.
-            </Text>
-            <View style={{ gap: spacing.md }}>
-              {ACTIVITY_LEVELS.map((level) => (
-                <Pressable key={level.factor} onPress={() => setActivity(level.factor)}>
-                  <Card
-                    variant={activity === level.factor ? 'tinted' : 'flat'}
-                    style={
-                      activity === level.factor
-                        ? { borderColor: theme.primary, borderWidth: 1.5 }
-                        : undefined
-                    }
-                  >
-                    <Text variant="h3">{level.title}</Text>
-                    <Text variant="small" tone="secondary">
-                      {level.detail}
-                    </Text>
-                  </Card>
-                </Pressable>
-              ))}
-            </View>
-          </>
-        )}
-
-        {step === 3 && (
-          <>
-            <Text variant="h1" style={styles.heading}>
-              Anything I should know about?
-            </Text>
-            <Text variant="body" tone="secondary" style={styles.sub}>
-              This changes your nutrient targets and what the coach will and won't
-              suggest. Skip if none apply.
-            </Text>
+      }
+      footer={
+        <View style={[styles.footer, { borderTopColor: theme.border }]}>
+          {step > 0 ? (
+            <Button
+              label="Back"
+              variant="secondary"
+              onPress={() => setStep((s) => s - 1)}
+              style={{ flex: 1 }}
+            />
+          ) : null}
+          <Button
+            label={step === STEPS.length - 1 ? 'Build my plan' : 'Continue'}
+            onPress={() => (step === STEPS.length - 1 ? finish() : setStep((s) => s + 1))}
+            disabled={!canContinue}
+            loading={busy}
+            style={{ flex: 2 }}
+          />
+        </View>
+      }
+    >
+      {step === 0 && (
+        <>
+          <Text variant="h1" style={styles.heading}>
+            First, the basics
+          </Text>
+          <View style={styles.field}>
+            <Text variant="caption" tone="muted">What should I call you?</Text>
+            <TextInput
+              value={name}
+              onChangeText={setName}
+              placeholder="Your name"
+              placeholderTextColor={theme.textMuted}
+              style={inputStyle}
+            />
+          </View>
+          <View style={styles.field}>
+            <Text variant="caption" tone="muted">Age</Text>
+            <TextInput
+              value={age}
+              onChangeText={setAge}
+              placeholder="21"
+              placeholderTextColor={theme.textMuted}
+              keyboardType="number-pad"
+              style={inputStyle}
+            />
+          </View>
+          <View style={styles.field}>
+            <Text variant="caption" tone="muted">Sex</Text>
             <View style={styles.chipRow}>
-              {CONDITIONS.map((condition) => (
+              {(['female', 'male', 'other'] as const).map((value) => (
                 <Chip
-                  key={condition}
-                  label={condition}
-                  selected={conditions.includes(condition)}
-                  onPress={() => toggle(conditions, condition, setConditions)}
+                  key={value}
+                  label={value[0].toUpperCase() + value.slice(1)}
+                  selected={sex === value}
+                  onPress={() => setSex(value)}
                 />
               ))}
             </View>
-
-            <View style={[styles.field, { marginTop: spacing.lg }]}>
-              <Text variant="caption" tone="muted">Daily medication (optional)</Text>
-              <TextInput
-                value={medication}
-                onChangeText={setMedication}
-                placeholder="e.g. Levothyroxine 100 mcg"
-                placeholderTextColor={theme.textMuted}
-                style={inputStyle}
-              />
-            </View>
-
-            {thyroid ? (
-              <Card variant="tinted">
-                <Text variant="smallMedium" tone="primary">
-                  One thing worth knowing
-                </Text>
-                <Text variant="small" tone="secondary" style={{ marginTop: spacing.xs }}>
-                  Never take iodine or kelp supplements with autoimmune thyroid
-                  disease — harm is documented from as little as 250 µg a day. BeFit
-                  will track iodine as a ceiling and warn you if you go over.
-                </Text>
-              </Card>
-            ) : null}
-          </>
-        )}
-
-        {step === 4 && (
-          <>
-            <Text variant="h1" style={styles.heading}>
-              Your day
-            </Text>
-            <View style={styles.row}>
-              <View style={[styles.field, { flex: 1 }]}>
-                <Text variant="caption" tone="muted">Wake up</Text>
-                <TextInput
-                  value={wake}
-                  onChangeText={setWake}
-                  placeholder="06:30"
-                  placeholderTextColor={theme.textMuted}
-                  style={inputStyle}
-                />
-              </View>
-              <View style={[styles.field, { flex: 1 }]}>
-                <Text variant="caption" tone="muted">Bed time</Text>
-                <TextInput
-                  value={sleep}
-                  onChangeText={setSleep}
-                  placeholder="22:30"
-                  placeholderTextColor={theme.textMuted}
-                  style={inputStyle}
-                />
-              </View>
-            </View>
-
-            <View style={[styles.field, { marginTop: spacing.base }]}>
-              <Text variant="caption" tone="muted">Vegetarian days</Text>
-              <View style={styles.chipRow}>
-                {WEEKDAYS.map((day, index) => (
-                  <Chip
-                    key={day}
-                    label={day}
-                    selected={vegDays.includes(index)}
-                    onPress={() => toggle(vegDays, index, setVegDays)}
-                  />
-                ))}
-              </View>
-              <Text variant="small" tone="muted">
-                Meal suggestions respect these. Protein is the thing that slips on veg
-                days, so BeFit watches it more closely.
-              </Text>
-            </View>
-          </>
-        )}
-
-        {error ? (
-          <View style={[styles.error, { backgroundColor: theme.surfaceSunken }]}>
-            <Text variant="small" style={{ color: semantic.danger }}>
-              {error}
+            <Text variant="small" tone="muted">
+              Used for the BMR equation and iron targets — both differ meaningfully.
             </Text>
           </View>
-        ) : null}
-      </ScrollView>
+        </>
+      )}
 
-      <View
-        style={[
-          styles.footer,
-          { paddingBottom: insets.bottom + spacing.base, borderTopColor: theme.border },
-        ]}
-      >
-        {step > 0 ? (
-          <Button
-            label="Back"
-            variant="secondary"
-            onPress={() => setStep((s) => s - 1)}
-            style={{ flex: 1 }}
-          />
-        ) : null}
-        <Button
-          label={step === STEPS.length - 1 ? 'Build my plan' : 'Continue'}
-          onPress={() => (step === STEPS.length - 1 ? finish() : setStep((s) => s + 1))}
-          disabled={!canContinue}
-          loading={busy}
-          style={{ flex: 2 }}
-        />
-      </View>
-    </KeyboardAvoidingView>
+      {step === 1 && (
+        <>
+          <Text variant="h1" style={styles.heading}>
+            Where you are, where you're going
+          </Text>
+          <View style={styles.field}>
+            <Text variant="caption" tone="muted">Height (cm)</Text>
+            <TextInput
+              value={height}
+              onChangeText={setHeight}
+              placeholder="158"
+              placeholderTextColor={theme.textMuted}
+              keyboardType="decimal-pad"
+              style={inputStyle}
+            />
+          </View>
+          <View style={styles.field}>
+            <Text variant="caption" tone="muted">Current weight (kg)</Text>
+            <TextInput
+              value={weight}
+              onChangeText={setWeight}
+              placeholder="65"
+              placeholderTextColor={theme.textMuted}
+              keyboardType="decimal-pad"
+              style={inputStyle}
+            />
+          </View>
+          <View style={styles.field}>
+            <Text variant="caption" tone="muted">Goal weight (kg)</Text>
+            <TextInput
+              value={goalWeight}
+              onChangeText={setGoalWeight}
+              placeholder="55"
+              placeholderTextColor={theme.textMuted}
+              keyboardType="decimal-pad"
+              style={inputStyle}
+            />
+          </View>
+        </>
+      )}
+
+      {step === 2 && (
+        <>
+          <Text variant="h1" style={styles.heading}>
+            How active are you?
+          </Text>
+          <Text variant="body" tone="secondary" style={styles.sub}>
+            Count everything — your commute and your job, not just the gym.
+          </Text>
+          <View style={{ gap: spacing.md }}>
+            {ACTIVITY_LEVELS.map((level) => (
+              <Pressable key={level.factor} onPress={() => setActivity(level.factor)}>
+                <Card
+                  variant={activity === level.factor ? 'tinted' : 'flat'}
+                  style={
+                    activity === level.factor
+                      ? { borderColor: theme.primary, borderWidth: 1.5 }
+                      : undefined
+                  }
+                >
+                  <Text variant="h3">{level.title}</Text>
+                  <Text variant="small" tone="secondary">
+                    {level.detail}
+                  </Text>
+                </Card>
+              </Pressable>
+            ))}
+          </View>
+        </>
+      )}
+
+      {step === 3 && (
+        <>
+          <Text variant="h1" style={styles.heading}>
+            Anything I should know about?
+          </Text>
+          <Text variant="body" tone="secondary" style={styles.sub}>
+            This changes your nutrient targets and what the coach will and won't
+            suggest. Skip if none apply.
+          </Text>
+          <View style={styles.chipRow}>
+            {CONDITIONS.map((condition) => (
+              <Chip
+                key={condition}
+                label={condition}
+                selected={conditions.includes(condition)}
+                onPress={() => toggle(conditions, condition, setConditions)}
+              />
+            ))}
+          </View>
+
+          <View style={[styles.field, { marginTop: spacing.lg }]}>
+            <Text variant="caption" tone="muted">Daily medication (optional)</Text>
+            <TextInput
+              value={medication}
+              onChangeText={setMedication}
+              placeholder="e.g. Levothyroxine 100 mcg"
+              placeholderTextColor={theme.textMuted}
+              style={inputStyle}
+            />
+          </View>
+
+          {thyroid ? (
+            <Card variant="tinted">
+              <Text variant="smallMedium" tone="primary">
+                One thing worth knowing
+              </Text>
+              <Text variant="small" tone="secondary" style={{ marginTop: spacing.xs }}>
+                Never take iodine or kelp supplements with autoimmune thyroid
+                disease — harm is documented from as little as 250 µg a day. BeFit
+                will track iodine as a ceiling and warn you if you go over.
+              </Text>
+            </Card>
+          ) : null}
+        </>
+      )}
+
+      {step === 4 && (
+        <>
+          <Text variant="h1" style={styles.heading}>
+            Your day
+          </Text>
+          <View style={styles.row}>
+            <View style={[styles.field, { flex: 1 }]}>
+              <Text variant="caption" tone="muted">Wake up</Text>
+              <TextInput
+                value={wake}
+                onChangeText={setWake}
+                placeholder="06:30"
+                placeholderTextColor={theme.textMuted}
+                style={inputStyle}
+              />
+            </View>
+            <View style={[styles.field, { flex: 1 }]}>
+              <Text variant="caption" tone="muted">Bed time</Text>
+              <TextInput
+                value={sleep}
+                onChangeText={setSleep}
+                placeholder="22:30"
+                placeholderTextColor={theme.textMuted}
+                style={inputStyle}
+              />
+            </View>
+          </View>
+
+          <View style={[styles.field, { marginTop: spacing.base }]}>
+            <Text variant="caption" tone="muted">Vegetarian days</Text>
+            <View style={styles.chipRow}>
+              {WEEKDAYS.map((day, index) => (
+                <Chip
+                  key={day}
+                  label={day}
+                  selected={vegDays.includes(index)}
+                  onPress={() => toggle(vegDays, index, setVegDays)}
+                />
+              ))}
+            </View>
+            <Text variant="small" tone="muted">
+              Meal suggestions respect these. Protein is the thing that slips on veg
+              days, so BeFit watches it more closely.
+            </Text>
+          </View>
+        </>
+      )}
+
+      {error ? (
+        <View style={[styles.error, { backgroundColor: theme.surfaceSunken }]}>
+          <Text variant="small" style={{ color: semantic.danger }}>
+            {error}
+          </Text>
+        </View>
+      ) : null}
+    </KeyboardScreen>
   );
 }
 
@@ -539,6 +529,7 @@ const styles = StyleSheet.create({
     gap: spacing.md,
     paddingHorizontal: spacing.xl,
     paddingTop: spacing.base,
+    paddingBottom: spacing.base,
     borderTopWidth: StyleSheet.hairlineWidth,
   },
   error: { padding: spacing.md, borderRadius: radius.sm },

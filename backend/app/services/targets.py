@@ -5,8 +5,8 @@ because they assume the lower bioavailability of Indian diets (iron 29 mg vs
 18 mg, zinc 13 mg vs 8 mg).
 """
 
-from datetime import date
 
+from app.core.clock import local_today
 from app.models.profile import Profile
 from app.models.targets import MicroTarget, Targets
 
@@ -119,7 +119,7 @@ def build_targets(profile: Profile, current_weight_kg: float | None = None) -> T
 
     return Targets(
         user_id=profile.user_id,
-        effective_from=date.today(),
+        effective_from=local_today(),
         bmr_kcal=round(adjusted_bmr),
         tdee_kcal=round(tdee),
         kcal=round(kcal),

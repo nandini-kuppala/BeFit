@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { useMemo, useState } from 'react';
+import { Alert, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
 
 import { supplements as api, type SupplementBody } from '../src/api/befit';
 import {
@@ -14,6 +15,7 @@ import { Card } from '../src/components/Card';
 import { Icon } from '../src/components/Icon';
 import { ScreenHeader } from '../src/components/ScreenHeader';
 import { Text } from '../src/components/Text';
+import { useUnsavedChangesGuard } from '../src/lib/useUnsavedChangesGuard';
 import { radius, semantic, spacing, useTheme } from '../src/theme';
 
 const DAY_SHORT = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -33,6 +35,8 @@ export default function Supplements() {
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<SupplementBody | null>(null);
+  /** The draft as opened, to tell real edits from an untouched form. */
+  const [original, setOriginal] = useState<SupplementBody | null>(null);
 
   const list = useQuery({ queryKey: ['supplements'], queryFn: () => api.list() });
 
@@ -71,21 +75,30 @@ export default function Supplements() {
   const items = list.data ?? [];
   const editing = editingId !== null && draft !== null;
 
+  const dirty = useMemo(
+    () => editing && JSON.stringify(draft) !== JSON.stringify(original),
+    [editing, draft, original],
+  );
+  useUnsavedChangesGuard(dirty && !save.isPending && !remove.isPending);
+
   const openNew = () => {
     setEditingId('new');
     setDraft({ ...BLANK });
+    setOriginal({ ...BLANK });
   };
 
   const openEdit = (item: Supplement) => {
-    setEditingId(item.id);
-    setDraft({
+    const opened: SupplementBody = {
       name: item.name,
       dose: item.dose,
       time_of_day: item.time_of_day,
       days: item.days,
       note: item.note ?? '',
       is_active: item.is_active,
-    });
+    };
+    setEditingId(item.id);
+    setDraft(opened);
+    setOriginal(opened);
   };
 
   const confirmDelete = (item: Supplement) =>
@@ -117,7 +130,11 @@ export default function Supplements() {
         }
       />
 
-      <ScrollView contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled">
+      <KeyboardAwareScrollView
+        contentContainerStyle={styles.page}
+        keyboardShouldPersistTaps="handled"
+        bottomOffset={spacing.base}
+      >
         {editing ? (
           <Editor
             draft={draft!}
@@ -204,7 +221,7 @@ export default function Supplements() {
             and most multivitamins — so the four-hour gap doesn't rely on memory.
           </Text>
         ) : null}
-      </ScrollView>
+      </KeyboardAwareScrollView>
     </View>
   );
 }

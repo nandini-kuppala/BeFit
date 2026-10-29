@@ -26,7 +26,7 @@ export default function Progress() {
   const [metric, setMetric] = useState<Metric>('sessions');
 
   const progress = useQuery({
-    queryKey: ['workout-progress'],
+    queryKey: ['workout-progress', 120],
     queryFn: () => workouts.progress(120),
   });
 

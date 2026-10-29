@@ -1,13 +1,13 @@
 import logging
 
 from beanie import init_beanie
-from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo import AsyncMongoClient
 
 from app.core.config import get_settings
 
 log = logging.getLogger(__name__)
 
-_client: AsyncIOMotorClient | None = None
+_client: AsyncMongoClient | None = None
 
 
 def document_models() -> list:
@@ -18,6 +18,7 @@ def document_models() -> list:
     from app.models.logs import FoodLog, SleepLog, WaterLog, WeightLog
     from app.models.meal import SavedMeal
     from app.models.profile import Profile
+    from app.models.resolve_cache import ResolveCache
     from app.models.supplement import Supplement, SupplementLog
     from app.models.targets import Targets
     from app.models.user import User
@@ -42,23 +43,34 @@ def document_models() -> list:
         WorkoutPlan,
         WorkoutSession,
         ChatThread,
+        ResolveCache,
     ]
 
 
 async def connect() -> None:
     global _client
     settings = get_settings()
-    _client = AsyncIOMotorClient(settings.mongodb_uri, serverSelectionTimeoutMS=8000)
-    await _client.admin.command("ping")
-    await init_beanie(
-        database=_client[settings.mongodb_db],
-        document_models=document_models(),
+    # PyMongo's native async client. Motor (what this used before) wraps the
+    # sync driver in a thread pool and reached end of life in May 2026.
+    _client = AsyncMongoClient(
+        settings.mongodb_uri,
+        serverSelectionTimeoutMS=8000,
+        appname="befit-api",
     )
+    await _client.admin.command("ping")
+    database = _client[settings.mongodb_db]
+
+    # Data fixes have to land before init_beanie builds indexes: a unique
+    # index cannot be created over rows that already violate it.
+    from app.core.migrations import run_migrations
+
+    await run_migrations(database)
+    await init_beanie(database=database, document_models=document_models())
     log.info("connected to MongoDB database %s", settings.mongodb_db)
 
 
 async def disconnect() -> None:
     global _client
     if _client is not None:
-        _client.close()
+        await _client.close()
         _client = None

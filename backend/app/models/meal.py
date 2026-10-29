@@ -14,6 +14,7 @@ class SavedMealItem(BaseModel):
     name: str
     quantity: float = 1.0
     unit: str = "serving"
+    portion_key: str | None = None
     grams: float
     # Frozen at save time, exactly like a food log. "Oats with almonds" should
     # keep meaning what it meant when she built it, even if the underlying food

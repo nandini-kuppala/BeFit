@@ -9,8 +9,9 @@ import logging
 
 import httpx
 
+from app.core import http
 from app.core.config import get_settings
-from app.models.nutrients import Nutrients
+from app.models.nutrients import HouseholdUnit, Nutrients
 
 log = logging.getLogger(__name__)
 
@@ -72,19 +73,28 @@ def _to_nutrients(food: dict) -> Nutrients:
 async def search(query: str, limit: int = 5) -> list[dict]:
     """Return candidate foods with per-100g nutrients, best match first."""
     settings = get_settings()
-    params = {
+    body = {
         "query": query,
-        "api_key": settings.usda_fdc_api_key,
         "pageSize": limit,
-        "dataType": "Foundation,SR Legacy,Survey (FNDDS)",
+        # POST, not GET: as a GET parameter "Survey (FNDDS)" is rejected with a
+        # bare nginx 400, which silently disabled this whole tier — every
+        # unknown food skipped USDA and fell through to web search or a guess.
+        # FNDDS is also where USDA's household measures (cup, piece) live.
+        "dataType": ["Survey (FNDDS)", "Foundation", "SR Legacy"],
     }
     try:
-        async with httpx.AsyncClient(timeout=12.0) as client:
-            response = await client.get(SEARCH_URL, params=params)
-            response.raise_for_status()
-            payload = response.json()
+        # Key in a header, not the query string: httpx error messages include
+        # the full URL, which put the API key into the logs on every failure.
+        response = await http.client().post(
+            SEARCH_URL,
+            json=body,
+            headers={"X-Api-Key": settings.usda_fdc_api_key},
+            timeout=10.0,
+        )
+        response.raise_for_status()
+        payload = response.json()
     except (httpx.HTTPError, ValueError) as exc:
-        log.warning("USDA lookup failed for %r: %s", query, exc)
+        log.warning("USDA lookup failed for %r: %s", query, type(exc).__name__)
         return []
 
     results = []
@@ -94,6 +104,29 @@ async def search(query: str, limit: int = 5) -> list[dict]:
                 "name": food.get("description", query).title(),
                 "nutrients": _to_nutrients(food),
                 "fdc_id": food.get("fdcId"),
+                "portions": _portions(food),
             }
         )
     return results
+
+
+def _portions(food: dict) -> list[HouseholdUnit]:
+    """USDA's own household measures ("1 cup", "1 medium") with gram weights.
+
+    FNDDS entries carry these in search results as foodMeasures; they are the
+    best portion data any open source has for generic foods.
+    """
+    units: list[HouseholdUnit] = []
+    for measure in food.get("foodMeasures") or []:
+        label = (measure.get("disseminationText") or "").replace(", NFS", "").strip()
+        grams = measure.get("gramWeight")
+        if not label or not grams or label.lower().startswith(("quantity not specified", "guideline")):
+            continue
+        if not 0 < float(grams) <= 3000:
+            continue
+        units.append(HouseholdUnit(label=label[:40], grams=float(grams)))
+        if len(units) >= 6:
+            break
+    if units:
+        units.append(HouseholdUnit(label="100 g", grams=100.0))
+    return units

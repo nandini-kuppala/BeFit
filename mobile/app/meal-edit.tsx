@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import {
@@ -14,9 +14,21 @@ import { food, savedMeals, type SavedMealBody } from '../src/api/befit';
 import {
   MEAL_LABELS,
   MEAL_ORDER,
+  type Confidence,
   type FoodSummary,
   type Meal,
+  type Nutrients,
+  type Portion,
+  type SavedMealItem,
 } from '../src/api/types';
+import { PortionPicker } from '../src/components/PortionPicker';
+import {
+  defaultQuantity,
+  findPortion,
+  formatQuantity,
+  gramsFor as gramsForPortion,
+  scale,
+} from '../src/lib/portions';
 import { Button } from '../src/components/Button';
 import { Card } from '../src/components/Card';
 import { ConfidenceDot } from '../src/components/ConfidenceDot';
@@ -25,35 +37,58 @@ import { ScreenHeader } from '../src/components/ScreenHeader';
 import { Text } from '../src/components/Text';
 import { radius, semantic, spacing, useTheme } from '../src/theme';
 
-/** Mirrors `nutrition.to_grams` on the server so the preview matches what will
- *  actually be saved. */
-const GRAM_UNITS = new Set(['g', 'gram', 'grams', 'ml']);
-
 type Draft = {
-  food: FoodSummary;
+  key: string;
+  foodId: string | null;
+  name: string;
+  confidence: Confidence;
+  portions: Portion[];
+  portionKey: string;
   quantity: number;
-  unit: string;
+  /** Per-100 g values: from the food when added, recovered from the frozen
+   *  snapshot when editing — no lookup either way. */
+  per100g: Nutrients;
+  /** For an item whose food no longer exists: its saved unit label. */
+  fixedUnit?: string;
+  fixedGramsPerUnit?: number;
 };
 
+let keyCounter = 0;
+const newKey = () => `item-${keyCounter++}`;
+
 function gramsFor(item: Draft): number {
-  const unit = item.unit.trim().toLowerCase();
-  if (GRAM_UNITS.has(unit)) return item.quantity;
-
-  const match = item.food.household_units.find((household) =>
-    unit ? household.label.toLowerCase().includes(unit) : false,
-  );
-  if (match) return item.quantity * match.grams;
-  return item.quantity * item.food.default_grams;
+  if (!item.portions.length) return (item.fixedGramsPerUnit ?? 0) * item.quantity;
+  return gramsForPortion(findPortion(item.portions, item.portionKey), item.quantity);
 }
 
-function kcalFor(item: Draft): number {
-  return (item.food.per_100g.kcal * gramsFor(item)) / 100;
+function draftFromSaved(item: SavedMealItem): Draft {
+  const perUnit = item.quantity > 0 ? item.grams / item.quantity : item.grams;
+  return {
+    key: newKey(),
+    foodId: item.food_id,
+    name: item.name,
+    confidence: item.confidence,
+    portions: item.portions,
+    portionKey: item.portion_key ?? item.portions[0]?.key ?? 'g',
+    quantity: item.quantity,
+    per100g: item.grams > 0 ? scale(item.nutrients, 10000 / item.grams) : item.nutrients,
+    fixedUnit: item.unit,
+    fixedGramsPerUnit: perUnit,
+  };
 }
 
-function unitFor(summary: FoodSummary): string {
-  const label = summary.household_units[0]?.label ?? '100 g';
-  // "2 idli" → "idli"; "100 g" → "g".
-  return label.replace(/^[\d.\s]+/, '').trim() || 'serving';
+function draftFromFood(summary: FoodSummary): Draft {
+  const portion = summary.portions[0];
+  return {
+    key: newKey(),
+    foodId: summary.id,
+    name: summary.name,
+    confidence: summary.confidence,
+    portions: summary.portions,
+    portionKey: portion?.key ?? 'g',
+    quantity: defaultQuantity(portion),
+    per100g: summary.per_100g,
+  };
 }
 
 function useDebounced(value: string, delay = 280) {
@@ -85,32 +120,25 @@ export default function MealEdit() {
     enabled: !!editingId,
   });
 
-  // An existing meal stores frozen nutrients, not FoodSummary rows, so the
-  // editor re-resolves each item to get a live food to scale from.
+  // Saved items carry their portions and frozen nutrients, so the editor opens
+  // instantly. It used to re-run the slow lookup chain for every item, and
+  // silently dropped any that failed — which Save then deleted for good.
   const current = existing.data?.find((meal) => meal.id === editingId);
 
   useEffect(() => {
     if (!current || hydrated) return;
     setName(current.name);
     setSlot(current.default_meal);
+    // Merge rather than overwrite, so anything added before this landed stays.
+    setItems((added) => [...current.items.map(draftFromSaved), ...added]);
     setHydrated(true);
-
-    Promise.all(
-      current.items.map(async (item) => {
-        try {
-          const resolved = await food.resolve(item.name);
-          return { food: resolved, quantity: item.quantity, unit: item.unit };
-        } catch {
-          return null;
-        }
-      }),
-    ).then((resolved) => setItems(resolved.filter((entry): entry is Draft => entry !== null)));
   }, [current, hydrated]);
 
   const search = useQuery({
-    queryKey: ['food-search', debouncedQuery],
-    queryFn: () => food.search(debouncedQuery),
+    queryKey: ['food-search', debouncedQuery.trim()],
+    queryFn: ({ signal }) => food.search(debouncedQuery.trim(), signal),
     enabled: debouncedQuery.trim().length >= 2,
+    placeholderData: keepPreviousData,
   });
 
   const save = useMutation({
@@ -119,35 +147,32 @@ export default function MealEdit() {
         name: name.trim(),
         default_meal: slot,
         items: items.map((item) => ({
-          food_id: item.food.id,
-          name: item.food.name,
+          food_id: item.foodId,
+          name: item.name,
           quantity: item.quantity,
-          unit: item.unit,
+          unit: item.portions.length ? item.portionKey : item.fixedUnit ?? 'serving',
         })),
       };
       return editingId ? savedMeals.update(editingId, body) : savedMeals.create(body);
     },
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ['saved-meals'] });
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['saved-meals'] });
       router.back();
     },
   });
 
   const add = (summary: FoodSummary) => {
-    setItems((current) => [...current, { food: summary, quantity: 1, unit: unitFor(summary) }]);
+    setItems((current) => [...current, draftFromFood(summary)]);
     setQuery('');
   };
 
-  const setQuantity = (index: number, next: number) =>
-    setItems((current) =>
-      current.map((item, position) =>
-        position === index ? { ...item, quantity: Math.max(0.5, next) } : item,
-      ),
-    );
+  const patch = (key: string, next: Partial<Draft>) =>
+    setItems((current) => current.map((item) => (item.key === key ? { ...item, ...next } : item)));
 
+  const kcalFor = (item: Draft) => (item.per100g.kcal * gramsFor(item)) / 100;
   const totalKcal = items.reduce((sum, item) => sum + kcalFor(item), 0);
   const totalProtein = items.reduce(
-    (sum, item) => sum + (item.food.per_100g.protein_g * gramsFor(item)) / 100,
+    (sum, item) => sum + (item.per100g.protein_g * gramsFor(item)) / 100,
     0,
   );
 
@@ -159,8 +184,11 @@ export default function MealEdit() {
   // Same escape hatches as the Log tab: a saved meal built from a near-miss
   // food is wrong every single time it is logged, not just once.
   const lookup = useMutation({
-    mutationFn: () => food.resolve(query.trim()),
-    onSuccess: (summary) => add(summary),
+    mutationFn: (text: string) => food.resolve(text),
+    // A late answer for a query she has since cleared or changed is dropped.
+    onSuccess: (summary, text) => {
+      if (query.trim() === text) add(summary);
+    },
   });
 
   return (
@@ -233,49 +261,36 @@ export default function MealEdit() {
               </Text>
             </View>
 
-            {items.map((item, index) => (
-              <View key={`${item.food.id}-${index}`} style={[styles.itemRow, { borderTopColor: theme.border }]}>
-                <ConfidenceDot level={item.food.confidence} />
-
-                <View style={{ flex: 1 }}>
-                  <Text variant="smallMedium" numberOfLines={1}>
-                    {item.food.name}
-                  </Text>
-                  <Text variant="small" tone="muted" tabular style={{ fontSize: 11.5 }}>
-                    {Math.round(gramsFor(item))} g · {Math.round(kcalFor(item))} kcal
-                  </Text>
-                </View>
-
-                <View style={[styles.stepper, { borderColor: theme.border }]}>
-                  <Pressable
-                    onPress={() => setQuantity(index, item.quantity - 0.5)}
-                    style={styles.stepButton}
-                    hitSlop={4}
-                  >
-                    <Text variant="bodyMedium" tone="secondary">
-                      −
+            {items.map((item) => (
+              <View key={item.key} style={[styles.itemBlock, { borderTopColor: theme.border }]}>
+                <View style={styles.itemRow}>
+                  <ConfidenceDot level={item.confidence} />
+                  <View style={{ flex: 1 }}>
+                    <Text variant="smallMedium" numberOfLines={1}>
+                      {item.name}
                     </Text>
-                  </Pressable>
-                  <Text variant="small" tabular style={styles.stepValue}>
-                    {item.quantity % 1 === 0 ? item.quantity : item.quantity.toFixed(1)}
-                  </Text>
-                  <Pressable
-                    onPress={() => setQuantity(index, item.quantity + 0.5)}
-                    style={styles.stepButton}
-                    hitSlop={4}
-                  >
-                    <Text variant="bodyMedium" tone="secondary">
-                      +
+                    <Text variant="small" tone="muted" tabular style={{ fontSize: 11.5 }}>
+                      {Math.round(gramsFor(item))} g · {Math.round(kcalFor(item))} kcal
+                      {!item.portions.length ? ` · ${formatQuantity(item.quantity)} ${item.fixedUnit}` : ''}
                     </Text>
+                  </View>
+                  <Pressable
+                    onPress={() => setItems((c) => c.filter((entry) => entry.key !== item.key))}
+                    hitSlop={10}
+                    accessibilityLabel={`Remove ${item.name}`}
+                  >
+                    <Icon name="trash" size={16} color={theme.textMuted} />
                   </Pressable>
                 </View>
-
-                <Pressable
-                  onPress={() => setItems((c) => c.filter((_, p) => p !== index))}
-                  hitSlop={10}
-                >
-                  <Icon name="trash" size={16} color={theme.textMuted} />
-                </Pressable>
+                {item.portions.length ? (
+                  <PortionPicker
+                    compact
+                    portions={item.portions}
+                    portionKey={item.portionKey}
+                    quantity={item.quantity}
+                    onChange={(next) => patch(item.key, { quantity: next.quantity, portionKey: next.portionKey })}
+                  />
+                ) : null}
               </View>
             ))}
           </Card>
@@ -312,7 +327,7 @@ export default function MealEdit() {
                       </Text>
                       <Text variant="small" tone="muted" tabular style={{ fontSize: 11.5 }}>
                         {Math.round(summary.per_100g.kcal)} kcal / 100 g ·{' '}
-                        {summary.household_units[0]?.label ?? '100 g'}
+                        {summary.portions[0]?.label ?? '100 g'}
                       </Text>
                     </View>
                     <Icon name="plus" size={18} color={theme.primary} strokeWidth={2.2} />
@@ -335,7 +350,7 @@ export default function MealEdit() {
                   <Button
                     label="Look it up"
                     size="sm"
-                    onPress={() => lookup.mutate()}
+                    onPress={() => lookup.mutate(query.trim())}
                     loading={lookup.isPending}
                     style={{ flex: 1 }}
                   />
@@ -405,14 +420,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: spacing.base,
   },
-  itemRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.md,
+  itemBlock: {
     paddingHorizontal: spacing.base,
     paddingVertical: spacing.md,
     borderTopWidth: StyleSheet.hairlineWidth,
+    gap: spacing.md,
   },
+  itemRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
   stepper: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderRadius: radius.sm },
   stepButton: { width: 30, height: 30, alignItems: 'center', justifyContent: 'center' },
   stepValue: { minWidth: 24, textAlign: 'center' },

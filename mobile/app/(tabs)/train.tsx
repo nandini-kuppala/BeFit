@@ -17,6 +17,7 @@ import { Card } from '../../src/components/Card';
 import { Checkbox } from '../../src/components/Checkbox';
 import { Icon } from '../../src/components/Icon';
 import { Text } from '../../src/components/Text';
+import { localISODate } from '../../src/lib/date';
 import { radius, semantic, series, spacing, useTheme } from '../../src/theme';
 
 const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -27,10 +28,7 @@ function todayIndex() {
   return (new Date().getDay() + 6) % 7;
 }
 
-function todayISO() {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-}
+const todayISO = () => localISODate();
 
 /**
  * "3 × 12–15 · light" → 3 sets of "12-15".
@@ -83,7 +81,7 @@ export default function TrainTab() {
     queryFn: () => workouts.session(),
   });
   const progress = useQuery({
-    queryKey: ['workout-progress'],
+    queryKey: ['workout-progress', 90],
     queryFn: () => workouts.progress(90),
   });
 

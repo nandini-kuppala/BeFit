@@ -81,9 +81,14 @@ export default function TabsLayout() {
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel="Log food by voice"
+                accessibilityHint="Long-press to search instead"
                 onPress={() => {
                   Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
                   router.push('/log');
+                }}
+                onLongPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy).catch(() => {});
+                  router.push('/food-add');
                 }}
                 style={({ pressed }) => [
                   styles.fab,

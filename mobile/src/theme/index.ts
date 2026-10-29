@@ -4,10 +4,20 @@ import { palettes, type Palette } from './tokens';
 
 export * from './tokens';
 
-export function useTheme(): Palette & { isDark: boolean } {
-  const scheme = useColorScheme();
-  const isDark = scheme === 'dark';
-  return { ...palettes[isDark ? 'dark' : 'light'], isDark };
+export type Theme = Palette & { isDark: boolean };
+
+/**
+ * Built once per scheme. Returning a fresh spread on every call gave every
+ * consumer a new object each render, which defeats memo and any dependency
+ * array that mentions the theme.
+ */
+export const themes: { light: Theme; dark: Theme } = {
+  light: Object.freeze({ ...palettes.light, isDark: false }),
+  dark: Object.freeze({ ...palettes.dark, isDark: true }),
+};
+
+export function useTheme(): Theme {
+  return useColorScheme() === 'dark' ? themes.dark : themes.light;
 }
 
 /** Violet-tinted elevation. Never black — black shadows read as cheap on a purple surface. */

@@ -1,7 +1,10 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import {
+  ActivityIndicator,
+  Alert,
+  Modal,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -13,18 +16,26 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
   WATER_PRESETS,
+  food as foodApi,
   logs,
   me,
+  savedMeals,
   sleep as sleepApi,
   supplements as supplementsApi,
 } from '../../src/api/befit';
+import { ApiError } from '../../src/api/client';
 import {
   MEAL_LABELS,
   type DaySummary,
+  type LoggedFood,
+  type Meal,
   type MealGroup,
   type SleepTrend,
   type SupplementToday,
 } from '../../src/api/types';
+import { FoodSheet } from '../../src/components/FoodSheet';
+import { localISODate } from '../../src/lib/date';
+import { formatQuantity } from '../../src/lib/portions';
 import { BarChart, type Bar } from '../../src/components/BarChart';
 import { Button } from '../../src/components/Button';
 import { Card } from '../../src/components/Card';
@@ -43,12 +54,41 @@ function greeting(hour: number) {
   return 'Good evening';
 }
 
+function shiftDay(iso: string, days: number): string {
+  const [y, m, d] = iso.split('-').map(Number);
+  return localISODate(new Date(y, m - 1, d + days));
+}
+
+function longDate(iso: string): string {
+  const [y, m, d] = iso.split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString(undefined, {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+  });
+}
+
 export default function Today() {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
 
-  const day = useQuery({ queryKey: ['day'], queryFn: () => logs.day() });
+  const today = localISODate();
+  const [date, setDate] = useState(today);
+  const isToday = date === today;
+
+  // Keyed by date: the old ['day'] key had no date, so an app left open
+  // overnight kept showing yesterday as "today".
+  const day = useQuery({
+    queryKey: ['day', date],
+    queryFn: ({ signal }) => logs.day(date, signal),
+    placeholderData: keepPreviousData,
+  });
+  const history = useQuery({
+    queryKey: ['day-history', today],
+    queryFn: () => logs.history(7, today),
+    staleTime: 60_000,
+  });
   const profile = useQuery({ queryKey: ['profile'], queryFn: () => me.profile() });
   const sleepTrend = useQuery({ queryKey: ['sleep-trend'], queryFn: () => sleepApi.trend(7) });
   const supplements = useQuery({
@@ -56,8 +96,10 @@ export default function Today() {
     queryFn: () => supplementsApi.today(),
   });
 
-  const data = day.data;
+  const data = day.data?.date === date ? day.data : undefined;
   const now = new Date();
+  const addFood = (meal?: Meal) =>
+    router.push(`/food-add?date=${date}${meal ? `&meal=${meal}` : ''}`);
 
   return (
     <ScrollView
@@ -71,6 +113,7 @@ export default function Today() {
           refreshing={day.isRefetching}
           onRefresh={() => {
             day.refetch();
+            history.refetch();
             sleepTrend.refetch();
             supplements.refetch();
           }}
@@ -81,15 +124,14 @@ export default function Today() {
       <View style={styles.header}>
         <View style={{ flex: 1 }}>
           <Text variant="caption" tone="muted">
-            {now.toLocaleDateString(undefined, {
-              weekday: 'long',
-              day: 'numeric',
-              month: 'long',
-            })}
+            {longDate(date)}
           </Text>
           <Text variant="h1" style={{ marginTop: 1 }}>
-            {greeting(now.getHours())}
-            {profile.data ? `, ${profile.data.profile.name.split(' ')[0]}` : ''}
+            {isToday
+              ? `${greeting(now.getHours())}${profile.data ? `, ${profile.data.profile.name.split(' ')[0]}` : ''}`
+              : date === shiftDay(today, -1)
+                ? 'Yesterday'
+                : 'Looking back'}
           </Text>
         </View>
         <Pressable
@@ -106,19 +148,39 @@ export default function Today() {
         </Pressable>
       </View>
 
-      {day.isError ? (
+      <WeekStrip
+        selected={date}
+        today={today}
+        days={history.data ?? []}
+        onSelect={setDate}
+      />
+
+      {day.isError && !data ? (
         <Card variant="tinted">
-          <Text variant="smallMedium">Couldn't load today</Text>
+          <Text variant="smallMedium">Couldn't load {isToday ? 'today' : 'that day'}</Text>
           <Text variant="small" tone="secondary" style={{ marginTop: 2 }}>
             {(day.error as Error).message}
           </Text>
+          <Button
+            label="Try again"
+            size="sm"
+            variant="secondary"
+            onPress={() => day.refetch()}
+            style={{ marginTop: spacing.md, alignSelf: 'flex-start' }}
+          />
         </Card>
+      ) : null}
+
+      {!data && day.isLoading ? (
+        <View style={styles.loadingBlock}>
+          <ActivityIndicator color={theme.primary} />
+        </View>
       ) : null}
 
       {data ? (
         <>
           <CalorieCard data={data} />
-          <MealsCard meals={data.meals} onAdd={() => router.push('/log')} />
+          <MealsCard date={date} meals={data.meals} onAdd={addFood} />
           <MacroCard data={data} />
 
           <NavRow
@@ -132,12 +194,80 @@ export default function Today() {
             <EstimateNotice share={data.estimated_share} />
           ) : null}
 
-          <WaterCard consumed={data.water_ml} target={data.targets.water_ml} />
-          <SleepCard trend={sleepTrend.data} targetHours={data.targets.sleep_hours} />
-          <SupplementCard data={supplements.data} onManage={() => router.push('/supplements')} />
+          <WaterCard date={date} consumed={data.water_ml} target={data.targets.water_ml} />
+          {isToday ? (
+            <>
+              <SleepCard trend={sleepTrend.data} targetHours={data.targets.sleep_hours} />
+              <SupplementCard data={supplements.data} onManage={() => router.push('/supplements')} />
+            </>
+          ) : null}
         </>
       ) : null}
     </ScrollView>
+  );
+}
+
+const DAY_INITIALS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+
+/** The last seven days at a glance — tap one to see or fill it in. A dot
+ *  under each shows whether anything was logged, so gaps are obvious. */
+function WeekStrip({
+  selected,
+  today,
+  days,
+  onSelect,
+}: {
+  selected: string;
+  today: string;
+  days: { date: string; kcal: number; target_kcal: number }[];
+  onSelect: (date: string) => void;
+}) {
+  const theme = useTheme();
+  const byDate = new Map(days.map((d) => [d.date, d]));
+  const dates = Array.from({ length: 7 }, (_, i) => shiftDay(today, i - 6));
+
+  return (
+    <View style={styles.weekStrip}>
+      {dates.map((iso) => {
+        const [y, m, d] = iso.split('-').map(Number);
+        const date = new Date(y, m - 1, d);
+        const info = byDate.get(iso);
+        const active = iso === selected;
+        const ratio = info && info.target_kcal ? info.kcal / info.target_kcal : 0;
+        const dot =
+          !info || info.kcal === 0
+            ? theme.border
+            : ratio > 1.1
+              ? semantic.warning
+              : ratio >= 0.8
+                ? semantic.success
+                : theme.primary;
+        return (
+          <Pressable
+            key={iso}
+            onPress={() => onSelect(iso)}
+            accessibilityRole="button"
+            accessibilityState={{ selected: active }}
+            accessibilityLabel={date.toDateString()}
+            style={[
+              styles.weekDay,
+              {
+                backgroundColor: active ? theme.primary : theme.surface,
+                borderColor: active ? theme.primary : theme.border,
+              },
+            ]}
+          >
+            <Text variant="caption" tone={active ? 'inverse' : 'muted'} style={{ fontSize: 9.5 }}>
+              {DAY_INITIALS[date.getDay()]}
+            </Text>
+            <Text variant="smallMedium" tone={active ? 'inverse' : 'default'} tabular>
+              {d}
+            </Text>
+            <View style={[styles.weekDot, { backgroundColor: active ? theme.onPrimary : dot }]} />
+          </Pressable>
+        );
+      })}
+    </View>
   );
 }
 
@@ -263,19 +393,43 @@ function EstimateNotice({ share }: { share: number }) {
   );
 }
 
-function WaterCard({ consumed, target }: { consumed: number; target: number }) {
+function WaterCard({ date, consumed, target }: { date: string; consumed: number; target: number }) {
   const theme = useTheme();
   const queryClient = useQueryClient();
+  const key = ['day', date];
 
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: ['day'] });
-  const add = useMutation({ mutationFn: (ml: number) => logs.water(ml), onSuccess: invalidate });
-  const undo = useMutation({ mutationFn: () => logs.undoWater(), onSuccess: invalidate });
+  // Optimistic: the glass fills on tap, and rolls back if the server says no.
+  const adjust = (delta: number) => {
+    const previous = queryClient.getQueryData<DaySummary>(key);
+    if (previous) {
+      queryClient.setQueryData<DaySummary>(key, {
+        ...previous,
+        water_ml: Math.max(0, previous.water_ml + delta),
+      });
+    }
+    return { previous };
+  };
+  const rollback = (_e: unknown, _v: unknown, context?: { previous?: DaySummary }) => {
+    if (context?.previous) queryClient.setQueryData(key, context.previous);
+  };
+  const settle = () => queryClient.invalidateQueries({ queryKey: key });
+
+  const add = useMutation({
+    mutationFn: (ml: number) => logs.water(ml, date),
+    onMutate: (ml) => adjust(ml),
+    onError: rollback,
+    onSettled: settle,
+  });
+  const undo = useMutation({
+    mutationFn: () => logs.undoWater(date),
+    onError: rollback,
+    onSettled: settle,
+  });
 
   // The bar is drawn in 200 ml glasses, so the units on screen match the units
   // on the buttons.
   const glasses = Math.max(1, Math.round(target / 200));
   const filled = Math.floor(consumed / 200);
-  const busy = add.isPending || undo.isPending;
 
   return (
     <Card>
@@ -290,7 +444,7 @@ function WaterCard({ consumed, target }: { consumed: number; target: number }) {
           {consumed > 0 ? (
             <Pressable
               onPress={() => undo.mutate()}
-              disabled={busy}
+              disabled={undo.isPending}
               hitSlop={10}
               accessibilityLabel="Undo last water entry"
             >
@@ -321,7 +475,6 @@ function WaterCard({ consumed, target }: { consumed: number; target: number }) {
         {WATER_PRESETS.map((preset) => (
           <Pressable
             key={preset.ml}
-            disabled={busy}
             onPress={() => add.mutate(preset.ml)}
             accessibilityRole="button"
             accessibilityLabel={`Add ${preset.sub} of water`}
@@ -347,7 +500,7 @@ function WaterCard({ consumed, target }: { consumed: number; target: number }) {
   );
 }
 
-const WEEKDAY_INITIALS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+const WEEKDAY_INITIALS = DAY_INITIALS;
 
 /** Sleep is entered as bed and wake time, not a duration — nobody knows how
  *  many hours they slept, but everyone knows when they went to bed. */
@@ -379,19 +532,21 @@ function SleepCard({
 
       return sleepApi.log(bedAt.toISOString(), wakeAt.toISOString());
     },
-    onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['day'] }),
-        queryClient.invalidateQueries({ queryKey: ['sleep-trend'] }),
-      ]);
+    onSuccess: () => {
       setEditing(false);
+      queryClient.invalidateQueries({ queryKey: ['day'] });
+      queryClient.invalidateQueries({ queryKey: ['sleep-trend'] });
     },
   });
 
   const nights = trend?.nights ?? [];
   const lastNight = nights.length ? nights[nights.length - 1] : undefined;
   const hours = lastNight?.minutes != null ? lastNight.minutes / 60 : null;
-  const valid = /^\d{1,2}:\d{2}$/.test(bed) && /^\d{1,2}:\d{2}$/.test(wake);
+  const validTime = (value: string) => {
+    const match = value.match(/^(\d{1,2}):(\d{2})$/);
+    return !!match && Number(match[1]) < 24 && Number(match[2]) < 60;
+  };
+  const valid = validTime(bed) && validTime(wake) && bed !== wake;
 
   const bars: Bar[] = nights.map((night, index) => {
     const date = new Date(`${night.date}T00:00:00`);
@@ -523,7 +678,24 @@ function SupplementCard({
   const toggle = useMutation({
     mutationFn: ({ id, taken }: { id: string; taken: boolean }) =>
       supplementsApi.setTaken(id, taken),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['supplements-today'] }),
+    // Tick immediately; a second quick tap then sends the right value instead
+    // of re-sending the stale one.
+    onMutate: ({ id, taken }) => {
+      const previous = queryClient.getQueryData<SupplementToday>(['supplements-today']);
+      if (previous) {
+        const items = previous.items.map((item) => (item.id === id ? { ...item, taken } : item));
+        queryClient.setQueryData<SupplementToday>(['supplements-today'], {
+          ...previous,
+          items,
+          taken_count: items.filter((item) => item.taken).length,
+        });
+      }
+      return { previous };
+    },
+    onError: (_e, _v, context) => {
+      if (context?.previous) queryClient.setQueryData(['supplements-today'], context.previous);
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['supplements-today'] }),
   });
 
   const items = data?.items ?? [];
@@ -598,63 +770,276 @@ function SupplementCard({
   );
 }
 
-function MealsCard({ meals, onAdd }: { meals: MealGroup[]; onAdd: () => void }) {
+type Editing = { item: LoggedFood; logId: string; meal: Meal };
+
+/**
+ * Every meal slot, always — an empty breakfast is something to fill, not
+ * something to hide. Items open the same sheet used to add them, so changing
+ * "2 idli" to "3" or moving it to lunch is one tap and a stepper.
+ */
+function MealsCard({
+  date,
+  meals,
+  onAdd,
+}: {
+  date: string;
+  meals: MealGroup[];
+  onAdd: (meal?: Meal) => void;
+}) {
   const theme = useTheme();
-  const logged = meals.filter((meal) => meal.items.length > 0);
+  const queryClient = useQueryClient();
+  const [editing, setEditing] = useState<Editing | null>(null);
+  const [savingMeal, setSavingMeal] = useState<MealGroup | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const refresh = () => {
+    queryClient.invalidateQueries({ queryKey: ['day'] });
+    queryClient.invalidateQueries({ queryKey: ['day-history'] });
+    queryClient.invalidateQueries({ queryKey: ['food-recent'] });
+  };
+
+  const detail = useQuery({
+    queryKey: ['food-detail', editing?.item.food_id],
+    queryFn: ({ signal }) => foodApi.detail(editing!.item.food_id!, signal),
+    enabled: !!editing?.item.food_id,
+    staleTime: 10 * 60_000,
+  });
+
+  const update = useMutation({
+    mutationFn: (value: { quantity: number; portionKey: string; meal: Meal }) =>
+      logs.updateItem(editing!.logId, editing!.item.id, {
+        quantity: value.quantity,
+        unit: value.portionKey,
+        ...(value.meal !== editing!.meal ? { meal: value.meal } : {}),
+      }),
+    onSuccess: () => {
+      setEditing(null);
+      refresh();
+    },
+  });
+
+  const remove = useMutation({
+    mutationFn: ({ logId, itemId }: { logId: string; itemId: string }) => logs.deleteItem(logId, itemId),
+    onSuccess: () => {
+      setEditing(null);
+      refresh();
+    },
+  });
+
+  const copy = useMutation({
+    mutationFn: (meal: Meal) => logs.copyMeal(shiftDay(date, -1), meal, date, meal),
+    onSuccess: refresh,
+    onError: (err, meal) =>
+      setNotice(
+        err instanceof ApiError && err.status === 404
+          ? `Nothing was logged for ${MEAL_LABELS[meal].toLowerCase()} the day before.`
+          : (err as Error).message,
+      ),
+  });
+
+  const openItem = (item: LoggedFood, meal: MealGroup) => {
+    if (!meal.log_id) return;
+    if (!item.food_id) {
+      // Quick-add entries have no food behind them; the only edit is removal.
+      Alert.alert(item.name, `${Math.round(item.nutrients.kcal)} kcal, added as a quick entry.`, [
+        { text: 'Keep', style: 'cancel' },
+        {
+          text: 'Remove',
+          style: 'destructive',
+          onPress: () => remove.mutate({ logId: meal.log_id!, itemId: item.id }),
+        },
+      ]);
+      return;
+    }
+    update.reset();
+    setEditing({ item, logId: meal.log_id, meal: meal.meal });
+  };
 
   return (
     <Card padded={false}>
       <View style={[styles.cardHeader, styles.blockHeader]}>
         <Text variant="caption" tone="muted">
-          Log today's meals
+          Meals
         </Text>
-        <Pressable onPress={onAdd} hitSlop={10}>
+        <Pressable onPress={() => onAdd()} hitSlop={10} style={styles.rowCenter}>
+          <Icon name="plus" size={16} color={theme.primary} />
           <Text variant="smallMedium" tone="primary">
-            Add
+            Add food
           </Text>
         </Pressable>
       </View>
 
-      {logged.length === 0 ? (
-        <Pressable onPress={onAdd} style={styles.empty}>
-          <Icon name="mic" size={24} color={theme.textMuted} />
-          <Text variant="body" tone="secondary" center style={{ marginTop: spacing.sm }}>
-            Nothing logged yet
-          </Text>
-          <Text variant="small" tone="muted" center style={{ marginTop: 1 }}>
-            Tap the mic and just say what you ate
+      {notice ? (
+        <Pressable onPress={() => setNotice(null)} style={[styles.notice, { backgroundColor: theme.surfaceSunken }]}>
+          <Text variant="small" tone="secondary">
+            {notice}
           </Text>
         </Pressable>
-      ) : (
-        logged.map((meal) => (
-          <View key={meal.meal} style={[styles.mealBlock, { borderTopColor: theme.border }]}>
-            <View style={styles.cardHeader}>
+      ) : null}
+
+      {meals.map((meal) => (
+        <View key={meal.meal} style={[styles.mealBlock, { borderTopColor: theme.border }]}>
+          <View style={styles.cardHeader}>
+            <Pressable onPress={() => onAdd(meal.meal)} style={{ flex: 1 }} hitSlop={6}>
               <Text variant="smallMedium">{MEAL_LABELS[meal.meal]}</Text>
-              <Text variant="small" tone="muted" tabular>
-                {Math.round(meal.kcal)} kcal
-              </Text>
+              {meal.items.length ? (
+                <Text variant="small" tone="muted" tabular style={{ fontSize: 11.5 }}>
+                  {Math.round(meal.kcal)} kcal · {Math.round(meal.protein_g)} g protein
+                </Text>
+              ) : null}
+            </Pressable>
+            <View style={styles.rowCenter}>
+              {meal.items.length ? (
+                <Pressable onPress={() => setSavingMeal(meal)} hitSlop={8} accessibilityLabel={`Save ${MEAL_LABELS[meal.meal]} as a meal`}>
+                  <Text variant="caption" tone="muted" style={{ fontSize: 10 }}>
+                    Save
+                  </Text>
+                </Pressable>
+              ) : (
+                <Pressable
+                  onPress={() => copy.mutate(meal.meal)}
+                  disabled={copy.isPending}
+                  hitSlop={8}
+                  accessibilityLabel={`Copy yesterday's ${MEAL_LABELS[meal.meal]}`}
+                >
+                  {copy.isPending && copy.variables === meal.meal ? (
+                    <ActivityIndicator size="small" color={theme.primary} />
+                  ) : (
+                    <Icon name="copy" size={16} color={theme.textMuted} />
+                  )}
+                </Pressable>
+              )}
+              <Pressable
+                onPress={() => onAdd(meal.meal)}
+                hitSlop={8}
+                accessibilityLabel={`Add to ${MEAL_LABELS[meal.meal]}`}
+                style={[styles.mealAdd, { backgroundColor: theme.primarySoft }]}
+              >
+                <Icon name="plus" size={16} color={theme.primary} strokeWidth={2.3} />
+              </Pressable>
             </View>
-            {meal.items.map((item, index) => (
-              <View key={`${item.name}-${index}`} style={styles.item}>
-                <ConfidenceDot level={item.confidence} />
-                <View style={{ flex: 1 }}>
-                  <Text variant="small" numberOfLines={1}>
-                    {item.name}
-                  </Text>
-                  <Text variant="small" tone="muted" tabular style={{ fontSize: 11 }}>
-                    {item.quantity % 1 === 0 ? item.quantity : item.quantity.toFixed(1)}{' '}
-                    {item.unit} · {Math.round(item.grams)} g
-                  </Text>
-                </View>
-                <Text variant="small" tone="secondary" tabular>
-                  {Math.round(item.nutrients.kcal)}
+          </View>
+          {meal.items.map((item) => (
+            <Pressable
+              key={item.id}
+              onPress={() => openItem(item, meal)}
+              style={({ pressed }) => [styles.item, pressed && { opacity: 0.6 }]}
+              accessibilityHint="Edit amount, move or remove"
+            >
+              <ConfidenceDot level={item.confidence} />
+              <View style={{ flex: 1 }}>
+                <Text variant="small" numberOfLines={1}>
+                  {item.name}
+                </Text>
+                <Text variant="small" tone="muted" tabular style={{ fontSize: 11 }}>
+                  {item.unit === 'entry'
+                    ? 'quick entry'
+                    : `${formatQuantity(item.quantity)} ${item.unit}${item.unit === 'g' ? '' : ` · ${Math.round(item.grams)} g`}`}
                 </Text>
               </View>
-            ))}
-          </View>
-        ))
-      )}
+              <Text variant="small" tone="secondary" tabular>
+                {Math.round(item.nutrients.kcal)}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+      ))}
+
+      <FoodSheet
+        visible={!!editing && !!detail.data}
+        food={detail.data ?? null}
+        mode="edit"
+        meal={editing?.meal ?? 'breakfast'}
+        initialQuantity={editing?.item.quantity}
+        initialPortionKey={editing?.item.portion_key ?? editing?.item.unit}
+        busy={update.isPending}
+        error={update.isError ? (update.error as Error).message : null}
+        onSubmit={(value) => update.mutate(value)}
+        onDelete={() =>
+          editing && remove.mutate({ logId: editing.logId, itemId: editing.item.id })
+        }
+        onClose={() => setEditing(null)}
+      />
+      {editing && detail.isLoading ? (
+        <View style={styles.sheetLoading}>
+          <ActivityIndicator color={theme.primary} />
+        </View>
+      ) : null}
+
+      <SaveMealModal
+        meal={savingMeal}
+        onClose={() => setSavingMeal(null)}
+        onSaved={(name) => {
+          setSavingMeal(null);
+          setNotice(`Saved "${name}" — log it again from Add food in one tap.`);
+          queryClient.invalidateQueries({ queryKey: ['saved-meals'] });
+        }}
+      />
     </Card>
+  );
+}
+
+function SaveMealModal({
+  meal,
+  onClose,
+  onSaved,
+}: {
+  meal: MealGroup | null;
+  onClose: () => void;
+  onSaved: (name: string) => void;
+}) {
+  const theme = useTheme();
+  const [name, setName] = useState('');
+  const save = useMutation({
+    mutationFn: () => savedMeals.fromLog(name.trim(), meal!.log_id!),
+    onSuccess: () => onSaved(name.trim()),
+  });
+
+  return (
+    <Modal
+      visible={!!meal}
+      transparent
+      animationType="fade"
+      onRequestClose={onClose}
+      onShow={() => {
+        setName(meal ? `My ${MEAL_LABELS[meal.meal].toLowerCase()}` : '');
+        save.reset();
+      }}
+    >
+      <Pressable style={styles.modalBackdrop} onPress={onClose} />
+      <View style={styles.modalCenter} pointerEvents="box-none">
+        <View style={[styles.modalCard, { backgroundColor: theme.canvas }]}>
+          <Text variant="h3">Save as a meal</Text>
+          <Text variant="small" tone="secondary">
+            {meal?.items.map((i) => i.name).join(', ')}
+          </Text>
+          <TextInput
+            value={name}
+            onChangeText={setName}
+            autoFocus
+            placeholder="Meal name"
+            placeholderTextColor={theme.textMuted}
+            style={[styles.sleepInput, { borderColor: theme.border, color: theme.text, backgroundColor: theme.surface }]}
+          />
+          {save.isError ? (
+            <Text variant="small" style={{ color: semantic.danger }}>
+              {(save.error as Error).message}
+            </Text>
+          ) : null}
+          <View style={{ flexDirection: 'row', gap: spacing.sm }}>
+            <Button label="Cancel" variant="secondary" size="sm" onPress={onClose} style={{ flex: 1 }} />
+            <Button
+              label="Save"
+              size="sm"
+              onPress={() => save.mutate()}
+              loading={save.isPending}
+              disabled={!name.trim()}
+              style={{ flex: 1 }}
+            />
+          </View>
+        </View>
+      </View>
+    </Modal>
   );
 }
 
@@ -734,7 +1119,30 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
     gap: spacing.sm,
   },
-  item: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  item: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingVertical: 2 },
+  mealAdd: {
+    width: 30,
+    height: 30,
+    borderRadius: radius.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  notice: { marginHorizontal: spacing.base, marginBottom: spacing.sm, padding: spacing.md, borderRadius: radius.sm },
+  sheetLoading: { paddingVertical: spacing.md, alignItems: 'center' },
+  loadingBlock: { paddingVertical: spacing['3xl'], alignItems: 'center' },
+  weekStrip: { flexDirection: 'row', gap: spacing.xs + 2 },
+  weekDay: {
+    flex: 1,
+    alignItems: 'center',
+    gap: 2,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+  },
+  weekDot: { width: 5, height: 5, borderRadius: radius.pill, marginTop: 2 },
+  modalBackdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(12, 8, 20, 0.45)' },
+  modalCenter: { flex: 1, justifyContent: 'center', padding: spacing.xl },
+  modalCard: { borderRadius: radius.lg, padding: spacing.lg, gap: spacing.md },
   empty: { alignItems: 'center', paddingVertical: spacing.xl, paddingHorizontal: spacing.xl },
   emptySmall: {
     alignItems: 'center',

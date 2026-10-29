@@ -1,14 +1,7 @@
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import {
-  KeyboardAvoidingView,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  TextInput,
-  View,
-} from 'react-native';
+import { Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Button } from '../src/components/Button';
@@ -60,16 +53,14 @@ export default function SignIn() {
   ];
 
   return (
-    <KeyboardAvoidingView
-      style={{ flex: 1, backgroundColor: theme.canvas }}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-    >
-      <ScrollView
+    <View style={{ flex: 1, backgroundColor: theme.canvas }}>
+      <KeyboardAwareScrollView
         contentContainerStyle={[
           styles.container,
           { paddingTop: insets.top + spacing['4xl'], paddingBottom: insets.bottom + spacing.xl },
         ]}
         keyboardShouldPersistTaps="handled"
+        bottomOffset={spacing.base}
       >
         <View style={[styles.mark, { backgroundColor: theme.primary }]}>
           <Text variant="h1" tone="inverse">
@@ -174,8 +165,8 @@ export default function SignIn() {
             </Text>
           </Pressable>
         </View>
-      </ScrollView>
-    </KeyboardAvoidingView>
+      </KeyboardAwareScrollView>
+    </View>
   );
 }
 

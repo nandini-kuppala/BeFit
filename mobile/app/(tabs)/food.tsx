@@ -1,8 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
   Alert,
   Pressable,
   ScrollView,
@@ -12,81 +11,20 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { diet, food, logs, savedMeals } from '../../src/api/befit';
-import {
-  MEAL_LABELS,
-  MEAL_ORDER,
-  type FoodSummary,
-  type Meal,
-  type SavedMeal,
-} from '../../src/api/types';
+import { diet, me, savedMeals } from '../../src/api/befit';
+import { MEAL_LABELS, type SavedMeal } from '../../src/api/types';
 import { Button } from '../../src/components/Button';
 import { Card } from '../../src/components/Card';
 import { ConfidenceDot } from '../../src/components/ConfidenceDot';
-import { Icon } from '../../src/components/Icon';
+import { Icon, type IconName } from '../../src/components/Icon';
 import { Text } from '../../src/components/Text';
 import { radius, semantic, spacing, useTheme } from '../../src/theme';
-
-/** Keeps a search request off every keystroke. */
-function useDebounced(value: string, delay = 280) {
-  const [debounced, setDebounced] = useState(value);
-
-  useEffect(() => {
-    const timer = setTimeout(() => setDebounced(value), delay);
-    return () => clearTimeout(timer);
-  }, [value, delay]);
-
-  return debounced;
-}
 
 export default function FoodTab() {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const queryClient = useQueryClient();
-
   const [tab, setTab] = useState<'log' | 'meals' | 'plan'>('log');
-  const [query, setQuery] = useState('');
-  const debouncedQuery = useDebounced(query);
-  const [selected, setSelected] = useState<FoodSummary | null>(null);
-  const [meal, setMeal] = useState<Meal>('lunch');
-  const [quantity, setQuantity] = useState(1);
-
-  const search = useQuery({
-    queryKey: ['food-search', debouncedQuery],
-    queryFn: () => food.search(debouncedQuery),
-    enabled: debouncedQuery.trim().length >= 2,
-  });
-
-  const resolve = useMutation({
-    mutationFn: () => food.resolve(query.trim()),
-    onSuccess: (result) => setSelected(result),
-  });
-
-  const log = useMutation({
-    mutationFn: () =>
-      logs.logFood(meal, [
-        {
-          food_id: selected!.id,
-          name: selected!.name,
-          quantity,
-          unit: selected!.household_units[0]?.label.replace(/^[\d.]+\s*/, '') || 'serving',
-        },
-      ]),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ['day'] });
-      setSelected(null);
-      setQuery('');
-      setQuantity(1);
-    },
-  });
-
-  const results = search.data?.results ?? [];
-  const searching = query.trim().length >= 2;
-  const settled = searching && !search.isFetching && debouncedQuery === query.trim();
-  // Offer the escape hatches whenever nothing matched closely, not only when
-  // the list is empty — a near miss is still a wrong answer.
-  const needsLookup = settled && !(search.data?.has_exact_match ?? false);
 
   return (
     <ScrollView
@@ -126,208 +64,57 @@ export default function FoodTab() {
 
       {tab === 'plan' ? <WeeklyPlan /> : null}
       {tab === 'meals' ? <MyMeals /> : null}
+      {tab === 'log' ? <LogLauncher /> : null}
+    </ScrollView>
+  );
+}
 
-      {tab === 'log' ? (
-        <>
-      <View
-        style={[
-          styles.searchBox,
-          { backgroundColor: theme.surface, borderColor: theme.border },
-        ]}
+/** Entry points into the one add-food flow, so there is a single place where
+ *  portions, variations and meal choice work the same way every time. */
+function LogLauncher() {
+  const theme = useTheme();
+  const router = useRouter();
+
+  const entries: { icon: IconName; title: string; subtitle: string; href: string }[] = [
+    { icon: 'search', title: 'Search foods', subtitle: 'Indian dishes, ingredients, packaged foods', href: '/food-add' },
+    { icon: 'mic', title: 'Say it', subtitle: '"Two idli, sambar and a filter coffee"', href: '/log' },
+    { icon: 'camera', title: 'Snap your plate', subtitle: 'Photo → items to confirm', href: '/food-photo' },
+    { icon: 'barcode', title: 'Scan a barcode', subtitle: 'Packaged foods via Open Food Facts', href: '/food-scan' },
+    { icon: 'recipe', title: 'Build a recipe', subtitle: 'Home cooking, exact to the ingredient', href: '/recipe-edit' },
+    { icon: 'edit', title: 'Add from a label', subtitle: 'Your own food, verified', href: '/food-new' },
+  ];
+
+  return (
+    <>
+      <Pressable
+        onPress={() => router.push('/food-add')}
+        style={[styles.searchBox, { backgroundColor: theme.surface, borderColor: theme.border }]}
+        accessibilityRole="search"
       >
         <Icon name="search" size={19} color={theme.textMuted} />
-        <TextInput
-          value={query}
-          onChangeText={(value) => {
-            setQuery(value);
-            setSelected(null);
-          }}
-          placeholder="Search idli, chicken, oats…"
-          placeholderTextColor={theme.textMuted}
-          style={[styles.searchInput, { color: theme.text }]}
-          autoCapitalize="none"
-          returnKeyType="search"
-        />
-        {query.length > 0 ? (
-          <Pressable onPress={() => setQuery('')} hitSlop={10}>
-            <Icon name="close" size={18} color={theme.textMuted} />
-          </Pressable>
-        ) : null}
-      </View>
-
-      {selected ? (
-        <Card>
-          <View style={styles.selectedHeader}>
-            <View style={{ flex: 1, gap: 4 }}>
-              <Text variant="h2">{selected.name}</Text>
-              <ConfidenceDot level={selected.confidence} showLabel />
-            </View>
-            <Pressable onPress={() => setSelected(null)} hitSlop={10}>
-              <Icon name="close" size={20} color={theme.textMuted} />
-            </Pressable>
-          </View>
-
-          <View style={styles.macroRow}>
-            {[
-              { label: 'kcal', value: Math.round(selected.per_100g.kcal * (selected.default_grams / 100) * quantity) },
-              { label: 'protein', value: `${(selected.per_100g.protein_g * (selected.default_grams / 100) * quantity).toFixed(1)}g` },
-              { label: 'carbs', value: `${(selected.per_100g.carbs_g * (selected.default_grams / 100) * quantity).toFixed(1)}g` },
-              { label: 'fat', value: `${(selected.per_100g.fat_g * (selected.default_grams / 100) * quantity).toFixed(1)}g` },
-            ].map((stat) => (
-              <View key={stat.label} style={styles.macroCell}>
-                <Text variant="h3" tabular>
-                  {stat.value}
-                </Text>
-                <Text variant="small" tone="muted">
-                  {stat.label}
+        <Text variant="body" tone="muted">
+          Search idli, roti, dal, paneer…
+        </Text>
+      </Pressable>
+      {entries.map((entry) => (
+        <Pressable key={entry.title} onPress={() => router.push(entry.href as never)}>
+          <Card padded={false} variant="flat">
+            <View style={styles.launchRow}>
+              <View style={[styles.launchIcon, { backgroundColor: theme.primarySoft }]}>
+                <Icon name={entry.icon} size={20} color={theme.primary} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text variant="bodyMedium">{entry.title}</Text>
+                <Text variant="small" tone="muted" numberOfLines={1}>
+                  {entry.subtitle}
                 </Text>
               </View>
-            ))}
-          </View>
-
-          <View style={styles.quantityRow}>
-            <View style={[styles.stepper, { borderColor: theme.border }]}>
-              <Pressable
-                onPress={() => setQuantity((q) => Math.max(0.5, q - 0.5))}
-                style={styles.stepButton}
-              >
-                <Text variant="h3" tone="secondary">−</Text>
-              </Pressable>
-              <Text variant="bodyMedium" tabular style={styles.stepValue}>
-                {quantity % 1 === 0 ? quantity : quantity.toFixed(1)}
-              </Text>
-              <Pressable onPress={() => setQuantity((q) => q + 0.5)} style={styles.stepButton}>
-                <Text variant="h3" tone="secondary">+</Text>
-              </Pressable>
-            </View>
-            <Text variant="small" tone="secondary">
-              × {selected.household_units[0]?.label ?? '100 g'}
-            </Text>
-          </View>
-
-          <View style={styles.mealRow}>
-            {MEAL_ORDER.map((option) => (
-              <Pressable
-                key={option}
-                onPress={() => setMeal(option)}
-                style={[
-                  styles.mealChip,
-                  {
-                    backgroundColor: meal === option ? theme.primary : theme.surfaceSunken,
-                    borderColor: meal === option ? theme.primary : theme.border,
-                  },
-                ]}
-              >
-                <Text variant="caption" tone={meal === option ? 'inverse' : 'secondary'}>
-                  {MEAL_LABELS[option]}
-                </Text>
-              </Pressable>
-            ))}
-          </View>
-
-          <Button
-            label="Add to log"
-            onPress={() => log.mutate()}
-            loading={log.isPending}
-            fullWidth
-            style={{ marginTop: spacing.base }}
-          />
-        </Card>
-      ) : null}
-
-      {searching && !selected ? (
-        <View style={{ gap: spacing.sm }}>
-          {search.isFetching ? (
-            <View style={styles.loading}>
-              <ActivityIndicator color={theme.primary} />
-            </View>
-          ) : null}
-
-          {results.map((item) => (
-            <Pressable key={item.id} onPress={() => setSelected(item)}>
-              <Card padded={false} variant="flat">
-                <View style={styles.resultRow}>
-                  <ConfidenceDot level={item.confidence} />
-                  <View style={{ flex: 1 }}>
-                    <Text variant="bodyMedium" numberOfLines={1}>
-                      {item.name}
-                    </Text>
-                    <Text variant="small" tone="muted" tabular>
-                      {Math.round(item.per_100g.kcal)} kcal / 100 g ·{' '}
-                      {item.household_units[0]?.label ?? '100 g'}
-                    </Text>
-                  </View>
-                  <Icon name="chevronRight" size={18} color={theme.textMuted} />
-                </View>
-              </Card>
-            </Pressable>
-          ))}
-
-          {needsLookup ? (
-            <Card variant="tinted">
-              <Text variant="smallMedium">
-                {results.length === 0
-                  ? `No match for "${query.trim()}"`
-                  : `Not quite "${query.trim()}"?`}
-              </Text>
-              <Text variant="small" tone="secondary" style={{ marginTop: 4 }}>
-                {results.length === 0
-                  ? 'BeFit can search nutrition databases and the web for it, then remember it for next time.'
-                  : 'Those are the closest names in your database. If none is right, search for the real thing or enter it yourself.'}
-              </Text>
-
-              <View style={{ flexDirection: 'row', gap: spacing.sm, marginTop: spacing.md }}>
-                <Button
-                  label="Look it up"
-                  size="sm"
-                  onPress={() => resolve.mutate()}
-                  loading={resolve.isPending}
-                  style={{ flex: 1 }}
-                />
-                <Button
-                  label="Enter it myself"
-                  variant="secondary"
-                  size="sm"
-                  onPress={() =>
-                    router.push(`/food-new?name=${encodeURIComponent(query.trim())}`)
-                  }
-                  style={{ flex: 1 }}
-                />
-              </View>
-
-              {resolve.isPending ? (
-                <Text variant="small" tone="muted" style={{ marginTop: spacing.sm }}>
-                  Checking USDA, then the web — this takes a few seconds.
-                </Text>
-              ) : null}
-              {resolve.isError ? (
-                <Text variant="small" style={{ color: semantic.danger, marginTop: spacing.sm }}>
-                  {(resolve.error as Error).message}
-                </Text>
-              ) : null}
-            </Card>
-          ) : null}
-        </View>
-      ) : null}
-
-      {!searching ? (
-        <Pressable onPress={() => router.push('/log')}>
-          <Card variant="tinted" style={styles.voicePrompt}>
-            <Icon name="mic" size={22} color={theme.primary} />
-            <View style={{ flex: 1 }}>
-              <Text variant="smallMedium" tone="primary">
-                Log by voice instead
-              </Text>
-              <Text variant="small" tone="secondary">
-                Say a whole meal at once — faster than searching item by item.
-              </Text>
+              <Icon name="chevronRight" size={18} color={theme.textMuted} />
             </View>
           </Card>
         </Pressable>
-      ) : null}
-        </>
-      ) : null}
-    </ScrollView>
+      ))}
+    </>
   );
 }
 
@@ -343,6 +130,10 @@ function WeeklyPlan() {
   const [draft, setDraft] = useState('');
 
   const week = useQuery({ queryKey: ['diet-week'], queryFn: () => diet.week() });
+  const profile = useQuery({ queryKey: ['profile'], queryFn: () => me.profile() });
+  // Medicines taken on an empty stomach open the day, from her profile —
+  // not a hard-coded tablet and time.
+  const morningMeds = (profile.data?.profile.medications ?? []).filter((m) => m.empty_stomach);
 
   const createPlan = useMutation({
     mutationFn: (fromTemplate: boolean) => diet.createPlan(fromTemplate),
@@ -494,17 +285,27 @@ function WeeklyPlan() {
           </View>
 
           <Card padded={false}>
-            <View style={[styles.planMealRow, { borderTopWidth: 0 }]}>
-              <Text variant="caption" tone="primary" tabular style={styles.mealTime}>
-                06:30
-              </Text>
-              <View style={{ flex: 1 }}>
-                <Text variant="smallMedium">Levothyroxine + plain water</Text>
-                <Text variant="small" tone="muted" style={{ marginTop: 2 }}>
-                  Nothing until 07:30 — no coffee, chai, milk or B-Protein
+            {morningMeds.map((med, index) => (
+              <View
+                key={`${med.name}-${index}`}
+                style={[styles.planMealRow, index === 0 ? { borderTopWidth: 0 } : { borderTopColor: theme.border }]}
+              >
+                <Text variant="caption" tone="primary" tabular style={styles.mealTime}>
+                  {med.time}
                 </Text>
+                <View style={{ flex: 1 }}>
+                  <Text variant="smallMedium">
+                    {med.name}
+                    {med.dose ? ` ${med.dose}` : ''} + plain water
+                  </Text>
+                  {med.food_gap_minutes ? (
+                    <Text variant="small" tone="muted" style={{ marginTop: 2 }}>
+                      Nothing else for {med.food_gap_minutes} min — no coffee, chai or milk
+                    </Text>
+                  ) : null}
+                </View>
               </View>
-            </View>
+            ))}
 
             {Object.entries(day.meals).map(([meal, text]) => (
               <View key={meal} style={[styles.planMealRow, { borderTopColor: theme.border }]}>
@@ -618,18 +419,21 @@ function MyMeals() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const [justLogged, setJustLogged] = useState<string | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (timer.current) clearTimeout(timer.current);
+  }, []);
 
   const meals = useQuery({ queryKey: ['saved-meals'], queryFn: () => savedMeals.list() });
 
   const logMeal = useMutation({
     mutationFn: (meal: SavedMeal) => savedMeals.log(meal.id),
-    onSuccess: async (result, meal) => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['day'] }),
-        queryClient.invalidateQueries({ queryKey: ['saved-meals'] }),
-      ]);
+    onSuccess: (_result, meal) => {
+      queryClient.invalidateQueries({ queryKey: ['day'] });
+      queryClient.invalidateQueries({ queryKey: ['saved-meals'] });
       setJustLogged(meal.id);
-      setTimeout(() => setJustLogged(null), 2200);
+      if (timer.current) clearTimeout(timer.current);
+      timer.current = setTimeout(() => setJustLogged(null), 2200);
     },
   });
 
@@ -692,7 +496,7 @@ function MyMeals() {
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={`Log ${meal.name}`}
-                disabled={logMeal.isPending}
+                disabled={logMeal.isPending && logMeal.variables?.id === meal.id}
                 onPress={() => logMeal.mutate(meal)}
                 style={({ pressed }) => [
                   styles.logButton,
@@ -785,6 +589,14 @@ const styles = StyleSheet.create({
   },
   panelHeader: { padding: spacing.base, paddingBottom: spacing.md },
   voicePrompt: { flexDirection: 'row', alignItems: 'center', gap: spacing.base },
+  launchRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, padding: spacing.base },
+  launchIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: radius.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 
   mealCardRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, padding: spacing.base },
   mealTitleRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },

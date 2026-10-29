@@ -85,4 +85,6 @@ class SupplementLog(Document):
                 ],
                 unique=True,
             ),
+            # "What did she take today" is queried by day, not by supplement.
+            pymongo.IndexModel([("user_id", pymongo.ASCENDING), ("date", pymongo.DESCENDING)]),
         ]

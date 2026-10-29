@@ -1,9 +1,9 @@
-from datetime import date
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
 from app.api.deps import ActiveTargets, CurrentProfile, CurrentUser
+from app.core.clock import local_today
 from app.data.default_plan import DEFAULT_WEEK
 from app.models.logs import WeightLog
 from app.models.profile import (
@@ -96,7 +96,7 @@ async def onboard(user: CurrentUser, body: OnboardingRequest) -> ProfileResponse
     await targets.insert()
 
     await WeightLog(
-        user_id=user.id, date=date.today(), kg=body.weight_kg, note="Starting weight"
+        user_id=user.id, date=local_today(), kg=body.weight_kg, note="Starting weight"
     ).insert()
     await _seed_workout_plan(user.id)
 
@@ -154,7 +154,7 @@ async def _recalculate(user_id, profile: Profile) -> Targets:
     )
     # Replace rather than version if today's target was already recalculated,
     # so a burst of profile edits doesn't create a row per keystroke.
-    if today is not None and today.effective_from == date.today():
+    if today is not None and today.effective_from == local_today():
         fresh.id = today.id
         await fresh.replace()
     else:
