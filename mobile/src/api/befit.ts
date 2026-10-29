@@ -1,8 +1,14 @@
 import { request, requestForm } from './client';
 import type {
   CustomFoodBody,
+  DayKcal,
   DaySummary,
+  FoodDetail,
   FoodSummary,
+  LoggedFood,
+  PhotoResponse,
+  RecentResponse,
+  ThreadSummary,
   Meal,
   SearchResponse,
   Nutrients,
@@ -32,6 +38,12 @@ export const auth = {
       body: { email, password },
       auth: false,
     }),
+  me: () => request<{ id: string; email: string }>('/auth/me'),
+  logoutAll: () => request<void>('/auth/logout-all', { method: 'POST' }),
+  /** Raw JSON text of everything stored for this account. */
+  exportData: () => request<unknown>('/auth/me/export', { timeoutMs: 45000 }),
+  deleteAccount: (password: string) =>
+    request<void>('/auth/me/delete', { method: 'POST', body: { password }, timeoutMs: 45000 }),
 };
 
 export type OnboardingPayload = {
@@ -59,18 +71,57 @@ export const me = {
   onboard: (payload: OnboardingPayload) =>
     request<ProfileResponse>('/me/onboard', { method: 'POST', body: payload }),
   profile: () => request<ProfileResponse>('/me/profile'),
+  updateProfile: (body: Record<string, unknown>) =>
+    request<ProfileResponse>('/me/profile', { method: 'PATCH', body }),
+  recalculateTargets: () => request<unknown>('/me/targets/recalculate', { method: 'POST' }),
+};
+
+export type RecipeBody = {
+  name: string;
+  ingredients: { food_id: string; name: string; grams: number }[];
+  cooked_weight_g?: number | null;
+  servings: number;
+  serving_label: string;
 };
 
 export const food = {
-  search: (query: string) =>
-    request<SearchResponse>(`/food/search?q=${encodeURIComponent(query)}`),
+  search: (query: string, signal?: AbortSignal) =>
+    request<SearchResponse>(`/food/search?q=${encodeURIComponent(query)}`, { signal }),
   /** Walks the full chain — corrects typos, checks USDA, then the web. Slow
    *  and costs an API call, so it is only ever triggered by an explicit tap. */
   resolve: (name: string) =>
     request<FoodSummary>('/food/resolve', { method: 'POST', body: { name } }),
+  detail: (id: string, signal?: AbortSignal) =>
+    request<FoodDetail>(`/food/${id}`, { signal }),
+  recent: (meal?: Meal, signal?: AbortSignal) =>
+    request<RecentResponse>(`/food/recent${meal ? `?meal=${meal}` : ''}`, { signal }),
   createCustom: (body: CustomFoodBody) =>
     request<FoodSummary>('/food/custom', { method: 'POST', body }),
+  createRecipe: (body: RecipeBody) =>
+    request<FoodSummary>('/food/recipe', { method: 'POST', body }),
+  remove: (id: string) => request<void>(`/food/${id}`, { method: 'DELETE' }),
   barcode: (code: string) => request<FoodSummary>(`/food/barcode/${code}`),
+  /** Snap-to-log. The photo is recognised server-side and discarded. */
+  photo: async (uri: string, mimeType: string, hint?: string, meal?: Meal) => {
+    const form = new FormData();
+    form.append('file', {
+      uri,
+      name: `meal.${mimeType.split('/')[1] ?? 'jpg'}`,
+      type: mimeType,
+    } as unknown as Blob);
+    if (hint) form.append('hint', hint);
+    if (meal) form.append('meal', meal);
+    return requestForm<PhotoResponse>('/food/photo', form);
+  },
+  correct: (
+    id: string,
+    per100g: Nutrients,
+    portions?: { label: string; grams: number }[],
+  ) =>
+    request<FoodSummary>(`/food/${id}/correct`, {
+      method: 'POST',
+      body: { per_100g: per100g, portions: portions ?? null },
+    }),
 };
 
 export const voiceInput = {
@@ -91,20 +142,43 @@ export type LogItem = {
   food_id?: string | null;
   name?: string;
   quantity: number;
+  /** A portion key from the food's `portions` ("idli", "katori", "g"). */
   unit: string;
+  grams?: number | null;
+  quick?: { name: string; kcal: number; protein_g?: number; fat_g?: number; carbs_g?: number };
+};
+
+export type UpdateItemBody = {
+  quantity?: number;
+  unit?: string;
+  grams?: number;
+  meal?: Meal;
+  date?: string;
 };
 
 export const logs = {
-  day: (on?: string) => request<DaySummary>(`/logs/day${on ? `?on=${on}` : ''}`),
-  logFood: (meal: Meal, items: LogItem[], viaVoice = false) =>
+  day: (on?: string, signal?: AbortSignal) =>
+    request<DaySummary>(`/logs/day${on ? `?on=${on}` : ''}`, { signal }),
+  history: (days = 7, to?: string) =>
+    request<DayKcal[]>(`/logs/history?days=${days}${to ? `&to=${to}` : ''}`),
+  logFood: (meal: Meal, items: LogItem[], viaVoice = false, date?: string) =>
     request<unknown>('/logs/food', {
       method: 'POST',
-      body: { meal, items, via_voice: viaVoice },
+      body: { meal, items, via_voice: viaVoice, ...(date ? { date } : {}) },
     }),
-  deleteItem: (logId: string, index: number) =>
-    request<void>(`/logs/food/${logId}/item/${index}`, { method: 'DELETE' }),
-  water: (ml: number) => request<unknown>('/logs/water', { method: 'POST', body: { ml } }),
-  undoWater: () => request<unknown>('/logs/water/last', { method: 'DELETE' }),
+  updateItem: (logId: string, itemId: string, body: UpdateItemBody) =>
+    request<LoggedFood>(`/logs/food/${logId}/items/${itemId}`, { method: 'PATCH', body }),
+  deleteItem: (logId: string, itemId: string) =>
+    request<void>(`/logs/food/${logId}/items/${itemId}`, { method: 'DELETE' }),
+  copyMeal: (fromDate: string, fromMeal: Meal, toDate: string, toMeal?: Meal) =>
+    request<unknown>('/logs/food/copy', {
+      method: 'POST',
+      body: { from_date: fromDate, from_meal: fromMeal, to_date: toDate, to_meal: toMeal ?? null },
+    }),
+  water: (ml: number, date?: string) =>
+    request<unknown>('/logs/water', { method: 'POST', body: { ml, ...(date ? { date } : {}) } }),
+  undoWater: (on?: string) =>
+    request<unknown>(`/logs/water/last${on ? `?on=${on}` : ''}`, { method: 'DELETE' }),
   weight: (kg: number) => request<unknown>('/logs/weight', { method: 'POST', body: { kg } }),
   weightHistory: () => request<WeightLog[]>('/logs/weight'),
 };
@@ -156,10 +230,10 @@ export const savedMeals = {
       method: 'POST',
       body: { name, log_id: logId },
     }),
-  log: (id: string, meal?: Meal) =>
+  log: (id: string, meal?: Meal, scale = 1, date?: string) =>
     request<{ logged_to: Meal; kcal: number; items: number }>(`/meals/${id}/log`, {
       method: 'POST',
-      body: { meal: meal ?? null },
+      body: { meal: meal ?? null, scale, ...(date ? { date } : {}) },
     }),
 };
 
@@ -250,6 +324,12 @@ export type ChatResponse = {
 
 export const coach = {
   suggestions: () => request<string[]>('/chat/suggestions'),
+  threads: () => request<ThreadSummary[]>('/chat/threads'),
+  thread: (id: string) =>
+    request<{ _id?: string; id?: string; title: string; messages: ChatMessage[] }>(
+      `/chat/threads/${id}`,
+    ),
+  deleteThread: (id: string) => request<void>(`/chat/threads/${id}`, { method: 'DELETE' }),
   send: (message: string, threadId?: string | null) =>
     request<ChatResponse>('/chat', {
       method: 'POST',

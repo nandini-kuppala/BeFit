@@ -21,6 +21,7 @@ import logging
 
 import httpx
 
+from app.core import http
 from app.core.config import get_settings
 
 log = logging.getLogger(__name__)
@@ -36,19 +37,19 @@ async def transcribe(
         return None
 
     try:
-        async with httpx.AsyncClient(timeout=45.0) as client:
-            response = await client.post(
-                STT_URL,
-                headers={"api-subscription-key": settings.sarvam_api_key},
-                files={"file": (filename, audio, "application/octet-stream")},
-                data={
-                    "model": settings.sarvam_stt_model,
-                    "mode": "transcribe",
-                    "language_code": language_code,
-                },
-            )
-            response.raise_for_status()
-            payload = response.json()
+        response = await http.client().post(
+            STT_URL,
+            headers={"api-subscription-key": settings.sarvam_api_key},
+            files={"file": (filename, audio, "application/octet-stream")},
+            data={
+                "model": settings.sarvam_stt_model,
+                "mode": "transcribe",
+                "language_code": language_code,
+            },
+            timeout=40.0,
+        )
+        response.raise_for_status()
+        payload = response.json()
     except (httpx.HTTPError, ValueError) as exc:
         log.warning("Sarvam transcription failed: %s", exc)
         return None

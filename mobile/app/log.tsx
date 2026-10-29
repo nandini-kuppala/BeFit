@@ -1,26 +1,26 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import * as Haptics from 'expo-haptics';
-import { useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useEffect, useState } from 'react';
 import {
-  KeyboardAvoidingView,
-  Platform,
+  BackHandler,
   Pressable,
   ScrollView,
   StyleSheet,
   TextInput,
   View,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { logs, voice } from '../src/api/befit';
-import { MEAL_LABELS, MEAL_ORDER, type DraftItem, type Meal } from '../src/api/types';
+import { MEAL_ORDER, type Meal } from '../src/api/types';
 import { Button } from '../src/components/Button';
-import { Card } from '../src/components/Card';
-import { ConfidenceDot } from '../src/components/ConfidenceDot';
+import { DraftReview, rowsFromDrafts, type DraftRow } from '../src/components/DraftReview';
 import { Icon } from '../src/components/Icon';
 import { Recorder } from '../src/components/Recorder';
 import { Text } from '../src/components/Text';
+import { mealForHour } from '../src/lib/date';
 import { radius, semantic, spacing, useTheme } from '../src/theme';
 
 const EXAMPLES = [
@@ -34,77 +34,61 @@ export default function LogScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const queryClient = useQueryClient();
+  const params = useLocalSearchParams<{ meal?: Meal; date?: string }>();
+  const presetMeal = params.meal && MEAL_ORDER.includes(params.meal) ? params.meal : undefined;
 
   const [text, setText] = useState('');
-  const [items, setItems] = useState<DraftItem[] | null>(null);
-  const [meal, setMeal] = useState<Meal>('breakfast');
+  const [items, setItems] = useState<DraftRow[] | null>(null);
+  const [meal, setMeal] = useState<Meal>(presetMeal ?? mealForHour(new Date().getHours()));
   const [error, setError] = useState<string | null>(null);
 
+  // Hardware back on the review step returns to the transcript instead of
+  // closing the screen and throwing the parsed items away.
+  useEffect(() => {
+    if (!items) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      setItems(null);
+      return true;
+    });
+    return () => sub.remove();
+  }, [items]);
+
   const parse = useMutation({
-    mutationFn: () => voice.parse(text.trim()),
+    // The device's clock decides the meal when none was said; the server's
+    // clock may be in another timezone.
+    mutationFn: () => voice.parse(text.trim(), presetMeal),
     onSuccess: (result) => {
-      setItems(result.items);
-      if (result.meal) setMeal(result.meal);
+      setItems(rowsFromDrafts(result.items));
+      setMeal(presetMeal ?? result.meal ?? mealForHour(new Date().getHours()));
       setError(null);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
     },
     onError: (err) => setError((err as Error).message),
   });
 
+  const loggable = (items ?? []).filter((row) => row.resolved && row.foodId);
+  const unresolved = (items ?? []).length - loggable.length;
+
   const save = useMutation({
     mutationFn: () =>
       logs.logFood(
         meal,
-        (items ?? []).map((item) => ({
-          food_id: item.food_id,
-          name: item.name,
-          quantity: item.quantity,
-          unit: item.unit,
-        })),
+        loggable.map((row) => ({ food_id: row.foodId, quantity: row.quantity, unit: row.portionKey })),
         true,
+        params.date,
       ),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ['day'] });
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['day'] });
+      queryClient.invalidateQueries({ queryKey: ['day-history'] });
+      queryClient.invalidateQueries({ queryKey: ['food-recent'] });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
       router.back();
     },
     onError: (err) => setError((err as Error).message),
   });
 
-  const totalKcal = (items ?? []).reduce((sum, item) => sum + item.nutrients.kcal, 0);
-  const totalProtein = (items ?? []).reduce((sum, item) => sum + item.nutrients.protein_g, 0);
-
-  function adjust(index: number, delta: number) {
-    setItems((current) => {
-      if (!current) return current;
-      const next = [...current];
-      const item = next[index];
-      const quantity = Math.max(0.5, Number((item.quantity + delta).toFixed(1)));
-      const scale = quantity / item.quantity;
-      next[index] = {
-        ...item,
-        quantity,
-        grams: Number((item.grams * scale).toFixed(1)),
-        // Nutrition scales linearly with portion, so the review sheet can show
-        // live totals without another round trip.
-        nutrients: Object.fromEntries(
-          Object.entries(item.nutrients).map(([key, value]) => [key, (value as number) * scale]),
-        ) as DraftItem['nutrients'],
-      };
-      return next;
-    });
-    Haptics.selectionAsync().catch(() => {});
-  }
-
-  function remove(index: number) {
-    setItems((current) => (current ? current.filter((_, i) => i !== index) : current));
-  }
-
   return (
-    <KeyboardAvoidingView
-      style={{ flex: 1, backgroundColor: theme.canvas }}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-    >
+    <KeyboardAvoidingView style={{ flex: 1, backgroundColor: theme.canvas }} behavior="padding">
       <View
         style={[
           styles.header,
@@ -171,105 +155,7 @@ export default function LogScreen() {
             </View>
           </>
         ) : (
-          <>
-            <View style={styles.mealRow}>
-              {MEAL_ORDER.map((option) => (
-                <Pressable
-                  key={option}
-                  onPress={() => setMeal(option)}
-                  style={[
-                    styles.mealChip,
-                    {
-                      backgroundColor: meal === option ? theme.primary : theme.surface,
-                      borderColor: meal === option ? theme.primary : theme.border,
-                    },
-                  ]}
-                >
-                  <Text variant="caption" tone={meal === option ? 'inverse' : 'secondary'}>
-                    {MEAL_LABELS[option]}
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
-
-            {items.map((item, index) => (
-              <Card key={`${item.name}-${index}`}>
-                <View style={styles.itemHeader}>
-                  <View style={{ flex: 1, gap: 3 }}>
-                    <Text variant="h3" numberOfLines={2}>
-                      {item.name}
-                    </Text>
-                    <View style={styles.rowCenter}>
-                      <ConfidenceDot level={item.confidence} showLabel />
-                      <Text variant="small" tone="muted" tabular>
-                        {Math.round(item.grams)} g
-                      </Text>
-                    </View>
-                  </View>
-                  <Pressable onPress={() => remove(index)} hitSlop={10} accessibilityLabel="Remove">
-                    <Icon name="trash" size={19} color={theme.textMuted} />
-                  </Pressable>
-                </View>
-
-                <View style={styles.itemFooter}>
-                  <View style={[styles.stepper, { borderColor: theme.border }]}>
-                    <Pressable
-                      onPress={() => adjust(index, -0.5)}
-                      style={styles.stepButton}
-                      hitSlop={6}
-                    >
-                      <Text variant="h3" tone="secondary">
-                        −
-                      </Text>
-                    </Pressable>
-                    <Text variant="bodyMedium" tabular style={styles.stepValue}>
-                      {item.quantity % 1 === 0 ? item.quantity : item.quantity.toFixed(1)}
-                    </Text>
-                    <Pressable
-                      onPress={() => adjust(index, 0.5)}
-                      style={styles.stepButton}
-                      hitSlop={6}
-                    >
-                      <Text variant="h3" tone="secondary">
-                        +
-                      </Text>
-                    </Pressable>
-                  </View>
-                  <Text variant="small" tone="muted">
-                    {item.unit}
-                  </Text>
-                  <View style={{ flex: 1 }} />
-                  <Text variant="h3" tabular>
-                    {Math.round(item.nutrients.kcal)}
-                  </Text>
-                  <Text variant="small" tone="muted">
-                    kcal
-                  </Text>
-                </View>
-              </Card>
-            ))}
-
-            <Card variant="tinted">
-              <View style={styles.totals}>
-                <View>
-                  <Text variant="h2" tabular>
-                    {Math.round(totalKcal)}
-                  </Text>
-                  <Text variant="small" tone="secondary">
-                    total kcal
-                  </Text>
-                </View>
-                <View style={{ alignItems: 'flex-end' }}>
-                  <Text variant="h2" tabular>
-                    {Math.round(totalProtein)} g
-                  </Text>
-                  <Text variant="small" tone="secondary">
-                    protein
-                  </Text>
-                </View>
-              </View>
-            </Card>
-          </>
+          <DraftReview rows={items} onChange={setItems} meal={meal} onMealChange={setMeal} />
         )}
 
         {error ? (
@@ -296,10 +182,14 @@ export default function LogScreen() {
               style={{ flex: 1 }}
             />
             <Button
-              label={`Log ${items.length} item${items.length === 1 ? '' : 's'}`}
+              label={
+                unresolved > 0
+                  ? `Log ${loggable.length} · ${unresolved} unmatched`
+                  : `Log ${loggable.length} item${loggable.length === 1 ? '' : 's'}`
+              }
               onPress={() => save.mutate()}
               loading={save.isPending}
-              disabled={items.length === 0}
+              disabled={loggable.length === 0}
               style={{ flex: 2 }}
             />
           </>

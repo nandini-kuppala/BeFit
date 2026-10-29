@@ -1,15 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocalSearchParams } from 'expo-router';
-import { useEffect, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { useCallback, useEffect, useState } from 'react';
+import { Alert, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
 
-import { diet, type DietDayBody } from '../src/api/befit';
+import { diet, type DietDay, type DietDayBody, type DietWeek } from '../src/api/befit';
 import { MEAL_LABELS, MEAL_ORDER, type Meal } from '../src/api/types';
 import { Button } from '../src/components/Button';
 import { Card } from '../src/components/Card';
+import { DayPickerSheet } from '../src/components/DayPickerSheet';
 import { Icon } from '../src/components/Icon';
 import { ScreenHeader } from '../src/components/ScreenHeader';
 import { Text } from '../src/components/Text';
+import { useUnsavedChangesGuard } from '../src/lib/useUnsavedChangesGuard';
 import { radius, semantic, spacing, useTheme } from '../src/theme';
 
 const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
@@ -62,26 +65,31 @@ export default function DietEdit() {
   const [isVeg, setIsVeg] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [loadedDay, setLoadedDay] = useState<number | null>(null);
+  const [copyOpen, setCopyOpen] = useState(false);
 
   const week = useQuery({ queryKey: ['diet-week'], queryFn: () => diet.week() });
   const day = week.data?.days.find((d) => d.weekday === weekday);
 
-  // Seeds the form once per day. Keying this on the query's `dataUpdatedAt`
-  // would wipe unsaved edits every time the query refetched on window focus.
-  useEffect(() => {
-    if (!day || loadedDay === day.weekday) return;
+  const seed = useCallback((source: DietDay) => {
     setSlots(
-      Object.entries(day.meals).map(([key, text]) => ({
+      Object.entries(source.meals).map(([key, text]) => ({
         key,
         label: slotLabel(key),
         text,
       })),
     );
-    setNote(day.note ?? '');
-    setIsVeg(day.is_veg);
+    setNote(source.note ?? '');
+    setIsVeg(source.is_veg);
     setDirty(false);
-    setLoadedDay(day.weekday);
-  }, [day, loadedDay]);
+    setLoadedDay(source.weekday);
+  }, []);
+
+  // Seeds the form once per day. Keying this on the query's `dataUpdatedAt`
+  // would wipe unsaved edits every time the query refetched on window focus.
+  useEffect(() => {
+    if (!day || loadedDay === day.weekday) return;
+    seed(day);
+  }, [day, loadedDay, seed]);
 
   const save = useMutation({
     mutationFn: () => {
@@ -102,13 +110,24 @@ export default function DietEdit() {
 
   const copy = useMutation({
     mutationFn: (from: number) => diet.copyDay(weekday, from),
-    onSuccess: async () => {
-      // Re-seed the form from the copied day rather than leaving the old text
-      // on screen.
-      setLoadedDay(null);
-      await queryClient.invalidateQueries({ queryKey: ['diet-week'] });
+    onSuccess: (copied) => {
+      // Seed straight from the server's answer. Nulling `loadedDay` and
+      // waiting for the refetch re-seeded from the *stale* cached day first,
+      // then marked it loaded — so the copy never appeared.
+      queryClient.setQueryData<DietWeek>(['diet-week'], (current) =>
+        current
+          ? {
+              ...current,
+              days: current.days.map((d) => (d.weekday === copied.weekday ? copied : d)),
+            }
+          : current,
+      );
+      if (copied.weekday === weekday) seed(copied);
+      queryClient.invalidateQueries({ queryKey: ['diet-week'] });
     },
   });
+
+  useUnsavedChangesGuard(dirty && !save.isPending && !copy.isPending);
 
   const touch = () => setDirty(true);
 
@@ -135,22 +154,7 @@ export default function DietEdit() {
     touch();
   };
 
-  const offerCopy = () => {
-    const others = DAY_NAMES.map((name, index) => ({ name, index })).filter(
-      (entry) => entry.index !== weekday,
-    );
-    Alert.alert(
-      'Copy a day',
-      `Replace ${DAY_NAMES[weekday]} with another day's meals?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        ...others.slice(0, 5).map((entry) => ({
-          text: entry.name,
-          onPress: () => copy.mutate(entry.index),
-        })),
-      ],
-    );
-  };
+  const offerCopy = () => setCopyOpen(true);
 
   return (
     <View style={{ flex: 1, backgroundColor: theme.canvas }}>
@@ -168,7 +172,11 @@ export default function DietEdit() {
         }
       />
 
-      <ScrollView contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled">
+      <KeyboardAwareScrollView
+        contentContainerStyle={styles.page}
+        keyboardShouldPersistTaps="handled"
+        bottomOffset={spacing.base}
+      >
         <View style={styles.rail}>
           {DAY_SHORT.map((label, index) => {
             const active = index === weekday;
@@ -302,6 +310,12 @@ export default function DietEdit() {
           </Text>
         ) : null}
 
+        {copy.isError ? (
+          <Text variant="small" style={{ color: semantic.danger }}>
+            {(copy.error as Error).message}
+          </Text>
+        ) : null}
+
         {dirty ? (
           <Button
             label="Save changes"
@@ -310,7 +324,21 @@ export default function DietEdit() {
             fullWidth
           />
         ) : null}
-      </ScrollView>
+      </KeyboardAwareScrollView>
+
+      <DayPickerSheet
+        visible={copyOpen}
+        title="Copy a day"
+        message={`Replace ${DAY_NAMES[weekday]} with another day's meals.${
+          dirty ? ' Your unsaved edits will be lost.' : ''
+        }`}
+        exclude={weekday}
+        onClose={() => setCopyOpen(false)}
+        onPick={(from) => {
+          setCopyOpen(false);
+          copy.mutate(from);
+        }}
+      />
     </View>
   );
 }

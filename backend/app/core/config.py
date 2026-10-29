@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -19,8 +20,7 @@ class Settings(BaseSettings):
     mongodb_uri: str
     mongodb_db: str = "befit"
 
-    jwt_secret_key: str
-    jwt_algorithm: str = "HS256"
+    jwt_secret_key: str = Field(min_length=32)
     access_token_minutes: int = 30
     refresh_token_days: int = 30
 
@@ -36,6 +36,28 @@ class Settings(BaseSettings):
     tavily_api_key: str | None = None
 
     openfoodfacts_user_agent: str = "BeFit/1.0"
+
+    # Every "today" the server computes is a day in this zone, not the host's.
+    # Cloud hosts run in UTC, which put a 1 a.m. snack on yesterday's log and
+    # guessed "breakfast" for a 1 p.m. lunch.
+    app_timezone: str = "Asia/Kolkata"
+
+    # Comma-separated. When set, only these addresses can register — without
+    # it, anyone who finds the URL can sign up and spend the Gemini quota.
+    allowed_emails: str = ""
+
+    # Seconds. Gemini is the slowest dependency by far; a request that has not
+    # answered by then is better abandoned than waited on.
+    gemini_timeout_s: float = 20.0
+    # Wall-clock budget for resolving one unknown food through every tier.
+    resolve_budget_s: float = 25.0
+
+    # Hide /docs and /openapi.json in production.
+    expose_docs: bool = True
+
+    @property
+    def allowed_email_set(self) -> set[str]:
+        return {e.strip().lower() for e in self.allowed_emails.split(",") if e.strip()}
 
     @property
     def voice_transcription_available(self) -> bool:

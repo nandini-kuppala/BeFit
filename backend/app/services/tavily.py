@@ -14,6 +14,7 @@ import logging
 
 import httpx
 
+from app.core import http
 from app.core.config import get_settings
 
 log = logging.getLogger(__name__)
@@ -49,12 +50,11 @@ async def search_nutrition(food_name: str, max_results: int = 5) -> list[dict]:
     }
 
     try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            response = await client.post(SEARCH_URL, json=payload)
-            response.raise_for_status()
-            data = response.json()
+        response = await http.client().post(SEARCH_URL, json=payload, timeout=12.0)
+        response.raise_for_status()
+        data = response.json()
     except (httpx.HTTPError, ValueError) as exc:
-        log.warning("Tavily search failed for %r: %s", food_name, exc)
+        log.warning("Tavily search failed for %r: %s", food_name, type(exc).__name__)
         return []
 
     results = []
@@ -72,27 +72,5 @@ async def search_nutrition(food_name: str, max_results: int = 5) -> list[dict]:
                     "content": content[:1200],
                 }
             )
-
-    if not results:
-        # Retry without the domain filter — an obscure food may not appear on
-        # any of the preferred sites.
-        payload.pop("include_domains", None)
-        try:
-            async with httpx.AsyncClient(timeout=20.0) as client:
-                response = await client.post(SEARCH_URL, json=payload)
-                response.raise_for_status()
-                data = response.json()
-            for item in data.get("results", [])[:max_results]:
-                content = (item.get("content") or "").strip()
-                if content:
-                    results.append(
-                        {
-                            "title": item.get("title", ""),
-                            "url": item.get("url", ""),
-                            "content": content[:1200],
-                        }
-                    )
-        except (httpx.HTTPError, ValueError):
-            return []
 
     return results

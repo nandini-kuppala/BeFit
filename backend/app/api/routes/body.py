@@ -3,7 +3,9 @@ import datetime as dt
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
 
-from app.api.deps import CurrentUser
+from app.api.deps import CurrentUser, ai_quota
+from app.api.uploads import read_limited
+from app.core.clock import local_today
 from app.models.body import BodyComposition, BodyMap, MapKind, SegmentalLean, ZoneMark
 from app.services import gemini
 
@@ -30,7 +32,7 @@ class ScanDraft(BaseModel):
     found_any: bool
 
 
-@router.post("/composition/scan", response_model=ScanDraft)
+@router.post("/composition/scan", response_model=ScanDraft, dependencies=[ai_quota(10, 60)])
 async def scan(user: CurrentUser, file: UploadFile = File(...)) -> ScanDraft:
     """Photo of an InBody-style printout → structured values for review.
 
@@ -43,12 +45,9 @@ async def scan(user: CurrentUser, file: UploadFile = File(...)) -> ScanDraft:
             detail="Upload a photo of the report (JPEG, PNG or WebP).",
         )
 
-    image = await file.read()
-    if len(image) > MAX_IMAGE_BYTES:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail="That image is too large. Try a smaller photo.",
-        )
+    image = await read_limited(
+        file, MAX_IMAGE_BYTES, "That image is too large. Try a smaller photo."
+    )
 
     result = await gemini.extract_body_scan(image, file.content_type)
     if result is None:
@@ -93,7 +92,7 @@ async def scan(user: CurrentUser, file: UploadFile = File(...)) -> ScanDraft:
 
 
 class SaveScanRequest(BaseModel):
-    date: dt.date = Field(default_factory=dt.date.today)
+    date: dt.date = Field(default_factory=local_today)
     weight_kg: float | None = None
     body_fat_pct: float | None = Field(default=None, ge=1, le=75)
     skeletal_muscle_kg: float | None = None
@@ -165,7 +164,7 @@ async def get_map(user: CurrentUser, kind: MapKind) -> BodyMap | None:
 async def put_map(user: CurrentUser, kind: MapKind, body: MapRequest) -> BodyMap:
     """One map per kind per day, so editing today's marks updates rather than
     piling up rows — but yesterday's stays, which is what makes it a history."""
-    today = dt.date.today()
+    today = local_today()
     entry = await BodyMap.find_one(
         BodyMap.user_id == user.id, BodyMap.kind == kind, BodyMap.date == today
     )

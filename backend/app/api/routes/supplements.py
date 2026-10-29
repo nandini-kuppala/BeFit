@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from app.api.deps import CurrentProfile, CurrentUser
+from app.core.clock import local_today
 from app.models.supplement import (
     SUPPLEMENT_TIME_LABELS,
     SUPPLEMENT_TIME_ORDER,
@@ -191,7 +192,7 @@ async def delete_supplement(user: CurrentUser, supplement_id: PydanticObjectId) 
 async def today(
     user: CurrentUser,
     profile: CurrentProfile,
-    on: dt.date = Query(default_factory=dt.date.today),
+    on: dt.date = Query(default_factory=local_today),
 ) -> TodayResponse:
     items = await Supplement.find(Supplement.user_id == user.id).to_list()
     due = [item for item in _sorted(items) if item.due_on(on)]
@@ -233,7 +234,7 @@ async def today(
 async def mark_taken(
     user: CurrentUser,
     supplement_id: PydanticObjectId,
-    on: dt.date = Query(default_factory=dt.date.today),
+    on: dt.date = Query(default_factory=local_today),
 ) -> None:
     supplement = await _owned(user.id, supplement_id)
     existing = await SupplementLog.find_one(
@@ -251,7 +252,7 @@ async def mark_taken(
 async def unmark_taken(
     user: CurrentUser,
     supplement_id: PydanticObjectId,
-    on: dt.date = Query(default_factory=dt.date.today),
+    on: dt.date = Query(default_factory=local_today),
 ) -> None:
     supplement = await _owned(user.id, supplement_id)
     existing = await SupplementLog.find_one(

@@ -81,7 +81,14 @@ class Nutrients(BaseModel):
 
 
 class HouseholdUnit(BaseModel):
-    """A portion people actually speak in: '1 idli', '1 katori', '1 medium'."""
+    """A portion people actually speak in: '1 idli', '1 katori', '1 medium'.
+
+    Stored labels are free text and some describe several pieces ("2 idli",
+    "5 pieces"); services/portions.py turns them into one-unit portions before
+    anything is multiplied by them.
+    """
 
     label: str
     grams: float = Field(gt=0)
+    # Canonical unit ("piece", "katori", "tbsp"…) when known.
+    key: str | None = None

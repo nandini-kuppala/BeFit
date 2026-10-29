@@ -4,8 +4,8 @@ from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field, HttpUrl
 
 from app.api.deps import CurrentProfile, CurrentUser
-from app.data.default_plan import EASY_DAY_VIDEO, SESSION_BLOCKS
-from app.data.default_plan import DEFAULT_WEEK
+from app.core.clock import local_today
+from app.data.default_plan import DEFAULT_WEEK, EASY_DAY_VIDEO, SESSION_BLOCKS
 from app.models.logs import WeightLog
 from app.models.workout import (
     CompletedExercise,
@@ -220,7 +220,7 @@ class CompletedInput(BaseModel):
 
 
 class SessionRequest(BaseModel):
-    date: dt.date = Field(default_factory=dt.date.today)
+    date: dt.date = Field(default_factory=local_today)
     completed: list[CompletedInput] = Field(default_factory=list)
     video_done: bool = False
     cardio_minutes: int = Field(default=0, ge=0, le=300)
@@ -292,7 +292,7 @@ async def log_session(
 
 @router.get("/session", response_model=WorkoutSession | None)
 async def get_session(
-    user: CurrentUser, on: dt.date = Query(default_factory=dt.date.today)
+    user: CurrentUser, on: dt.date = Query(default_factory=local_today)
 ) -> WorkoutSession | None:
     """Lets the checkboxes restore when she reopens the screen mid-session."""
     return await WorkoutSession.find_one(
@@ -302,7 +302,7 @@ async def get_session(
 
 @router.delete("/session", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_session(
-    user: CurrentUser, on: dt.date = Query(default_factory=dt.date.today)
+    user: CurrentUser, on: dt.date = Query(default_factory=local_today)
 ) -> None:
     session = await WorkoutSession.find_one(
         WorkoutSession.user_id == user.id, WorkoutSession.date == on
@@ -313,7 +313,7 @@ async def delete_session(
 
 @router.get("/sessions", response_model=list[WorkoutSession])
 async def sessions(user: CurrentUser, days: int = Query(default=30, le=400)) -> list:
-    since = dt.date.today() - dt.timedelta(days=days)
+    since = local_today() - dt.timedelta(days=days)
     return (
         await WorkoutSession.find(
             WorkoutSession.user_id == user.id, WorkoutSession.date >= since
@@ -429,7 +429,7 @@ async def progress(
     profile: CurrentProfile,
     days: int = Query(default=90, ge=7, le=365),
 ) -> ProgressResponse:
-    today = dt.date.today()
+    today = local_today()
     start = today - dt.timedelta(days=days - 1)
 
     all_sessions = (
@@ -437,7 +437,6 @@ async def progress(
         .sort(-WorkoutSession.date)
         .to_list()
     )
-    in_range = [s for s in all_sessions if start <= s.date <= today]
     by_date = {s.date: s for s in all_sessions}
 
     plan = await _existing(user.id)

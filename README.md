@@ -11,10 +11,17 @@ came from an AI estimate rather than a measured value.
 
 ## What it does
 
-- **Food** — search, barcode and **voice logging** ("two idlis with sambar and a
-  boiled egg"), with macros *and* 20+ micronutrients tracked against targets.
-  Saved meals log a whole breakfast in one tap, and anything the lookup chain
-  can't find can be entered by hand from the packet.
+- **Food** — one Add food screen with search, **voice** ("two idlis with sambar
+  and a boiled egg"), **photo** (snap the plate, confirm the items), **barcode**
+  and quick-add calories. Every food has real portions — "1 idli", "1 katori",
+  "1 tbsp", grams — with a quantity stepper and fractions, and dishes come with
+  their variations side by side (chapati / with ghee / paratha). Usual, recent
+  and frequent foods log again in one tap at last time's amount; yesterday's
+  meal copies across in one tap; logged items can be edited, moved or removed.
+  Saved meals and home recipes (ingredients + cooked weight) cover home
+  cooking; anything else can be entered from the packet or corrected, and
+  the correction is used from then on. Macros *and* 20+ micronutrients are
+  tracked against targets.
 - **Training** — a weekly plan you can edit, per-exercise tick-off with sets and
   load, MET-based calorie estimates, streaks, a month calendar and volume trends.
 - **Body** — weight trend, body-composition capture by photo OCR, and an
@@ -55,8 +62,10 @@ before the query leaves the building, because USDA answers "pumpkin sed" with
 "Bread, pumpkin". Whatever comes back is then scored against the query and
 discarded if it isn't actually the food that was asked for.
 
-The seeded database holds ~120 Indian foods from IFCT 2017 and the Anuvaad Indian
-Nutrient Databank. Recipe items were recomputed from raw ingredients with
+The seeded database holds ~120 curated Indian dishes (IFCT 2017 and the Anuvaad
+Indian Nutrient Databank), a handful of variants computed from them exactly
+(chapati + 1 tsp ghee), and all 542 raw foods of IFCT 2017 with their names in
+Indian languages as search aliases — "sajje" and "kambu" both find bajra. Recipe items were recomputed from raw ingredients with
 cooking-retention factors, because several published values are stated on a
 raw-ingredient basis and are badly wrong if used directly.
 
@@ -106,8 +115,20 @@ the rate limit), Sarvam (server-side speech-to-text) and Google Vision (body-sca
 OCR). No key is ever shipped inside the mobile app — the app holds a JWT and the
 backend holds the credentials.
 
+## Deployment
+
+See [DEPLOYMENT.md](DEPLOYMENT.md): free hosting for personal use (Cloud Run in
+Mumbai + Atlas free tier) and the Play Store checklist for a public release.
+
+## Tests
+
+`backend/tests/smoke_api.py` exercises the API end to end against a running
+server — use a throwaway database (`MONGODB_DB=befit_qa`), never the real one.
+
 ## Licence
 
-Not yet chosen. Note that IFCT 2017 has been AGPL-3.0 licensed since April 2025,
-which has implications for hosting this as a service; that needs resolving before
-any public deployment.
+Not yet chosen. The IFCT 2017 data is loaded from `@ifct2017/compositions@2.0.9`,
+the last MIT-licensed release; later releases are AGPL-3.0 and must not be
+swapped in without re-checking. The underlying tables are NIN-ICMR's
+publication, and the Anuvaad INDB recipe values used in the curated seed have
+no stated licence — ask the authors before a public release.

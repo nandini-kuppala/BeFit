@@ -45,7 +45,13 @@
           }
         }
       ],
-      "expo-audio"
+      "expo-audio",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "BeFit uses the camera to scan food barcodes and photograph meals."
+        }
+      ]
     ]
   }
 }

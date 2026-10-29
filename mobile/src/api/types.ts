@@ -43,6 +43,10 @@ export type Nutrients = {
 
 export type HouseholdUnit = { label: string; grams: number };
 
+/** One unit a food can be logged in — always ONE of it ("1 idli", 40 g).
+ *  Send `key` as the log item's unit; the server does the gram maths. */
+export type Portion = { key: string; label: string; grams: number; is_default: boolean };
+
 export type FoodSummary = {
   id: string;
   name: string;
@@ -50,12 +54,47 @@ export type FoodSummary = {
   source: string;
   confidence: Confidence;
   is_veg: boolean;
+  brand?: string | null;
   per_100g: Nutrients;
+  /** Default first. */
+  portions: Portion[];
   household_units: HouseholdUnit[];
   default_grams: number;
+  family?: string | null;
+  variant?: string | null;
+  /** Other variations of the same dish ("Roti" -> Chapati with ghee, Paratha…). */
+  variants_count: number;
+  is_personal: boolean;
+  is_recipe: boolean;
   /** 0-1, how well this answers the query. 1.0 for a non-search context. */
   match_score: number;
 };
+
+export type RecipeIngredient = { food_id: string | null; name: string; grams: number };
+
+export type FoodDetail = FoodSummary & {
+  variants: FoodSummary[];
+  recipe: RecipeIngredient[] | null;
+  recipe_yield_g: number | null;
+};
+
+export type RecentFood = {
+  food: FoodSummary;
+  times: number;
+  last_logged: string;
+  last_quantity: number;
+  last_portion_key: string | null;
+  last_meal: Meal;
+};
+
+export type RecentResponse = {
+  recent: RecentFood[];
+  frequent: RecentFood[];
+  for_meal: RecentFood[];
+  meal: Meal;
+};
+
+export type DayKcal = { date: string; kcal: number; protein_g: number; target_kcal: number };
 
 export type SearchResponse = {
   results: FoodSummary[];
@@ -78,14 +117,22 @@ export type CustomFoodBody = {
   sugar_g: number;
   serving_label: string;
   serving_grams: number | null;
+  extra_portions?: { label: string; grams: number }[];
   is_veg: boolean;
+  barcode?: string | null;
+  iron_mg?: number;
+  calcium_mg?: number;
+  sodium_mg?: number;
+  potassium_mg?: number;
 };
 
 export type LoggedFood = {
+  id: string;
   food_id: string | null;
   name: string;
   quantity: number;
   unit: string;
+  portion_key: string | null;
   grams: number;
   nutrients: Nutrients;
   source: string;
@@ -132,6 +179,7 @@ export type MealGroup = {
   log_id: string | null;
   items: LoggedFood[];
   kcal: number;
+  protein_g: number;
 };
 
 export type DaySummary = {
@@ -150,14 +198,22 @@ export type DaySummary = {
 export type DraftItem = {
   food_id: string | null;
   name: string;
+  /** What was said or seen, before matching. */
+  heard_as: string;
   quantity: number;
   unit: string;
+  portion_key: string | null;
   grams: number;
   nutrients: Nutrients;
   source: string;
   confidence: Confidence;
   resolved: boolean;
+  /** False when the spoken unit didn't fit and the default portion was used. */
+  unit_matched: boolean;
+  portions: Portion[];
 };
+
+export type PhotoResponse = { meal: Meal; items: DraftItem[] };
 
 export type ParseResponse = {
   transcript: string;
@@ -269,9 +325,11 @@ export type SavedMealItem = {
   name: string;
   quantity: number;
   unit: string;
+  portion_key: string | null;
   grams: number;
   nutrients: Nutrients;
   confidence: Confidence;
+  portions: Portion[];
 };
 
 export type SavedMeal = {
@@ -351,3 +409,11 @@ export type TokenPair = {
 };
 
 export type WeightLog = { date: string; kg: number; note: string | null };
+
+export type ThreadSummary = {
+  id: string;
+  title: string;
+  updated_at: string;
+  message_count: number;
+  preview: string;
+};

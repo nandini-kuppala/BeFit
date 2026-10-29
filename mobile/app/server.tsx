@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { StyleSheet, TextInput, View } from 'react-native';
+import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
 
 import {
   DEFAULT_BASE_URL,
@@ -55,7 +56,11 @@ export default function ServerSettings() {
     <View style={{ flex: 1, backgroundColor: theme.canvas }}>
       <ScreenHeader title="Server" subtitle="Where BeFit looks for your data" />
 
-      <ScrollView contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled">
+      <KeyboardAwareScrollView
+        contentContainerStyle={styles.page}
+        keyboardShouldPersistTaps="handled"
+        bottomOffset={spacing.base}
+      >
         <Card>
           <Text variant="caption" tone="muted">
             Address
@@ -145,7 +150,7 @@ export default function ServerSettings() {
             style={{ marginTop: spacing.md }}
           />
         </Card>
-      </ScrollView>
+      </KeyboardAwareScrollView>
     </View>
   );
 }

@@ -2,10 +2,12 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { Image, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { Image, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { bodyApi, type ScanDraft } from '../src/api/befit';
+import { prepareForUpload } from '../src/lib/image';
 import { Button } from '../src/components/Button';
 import { Card } from '../src/components/Card';
 import { Icon } from '../src/components/Icon';
@@ -99,8 +101,7 @@ export default function BodyScan() {
         : await ImagePicker.launchImageLibraryAsync({ quality: 0.8 });
 
     if (result.canceled || result.assets.length === 0) return;
-    const asset = result.assets[0];
-    setImage({ uri: asset.uri, mime: asset.mimeType ?? 'image/jpeg' });
+    setImage(await prepareForUpload(result.assets[0]));
     setReviewing(false);
     setValues({});
   }
@@ -119,9 +120,10 @@ export default function BodyScan() {
         </Pressable>
       </View>
 
-      <ScrollView
+      <KeyboardAwareScrollView
         contentContainerStyle={[styles.body, { paddingBottom: spacing['2xl'] }]}
         keyboardShouldPersistTaps="handled"
+        bottomOffset={spacing.base}
       >
         {!reviewing ? (
           <>
@@ -212,7 +214,7 @@ export default function BodyScan() {
             </Text>
           </View>
         ) : null}
-      </ScrollView>
+      </KeyboardAwareScrollView>
 
       <View
         style={[

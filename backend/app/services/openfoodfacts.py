@@ -5,9 +5,11 @@ often missing; whatever is absent stays 0.0 rather than being guessed.
 """
 
 import logging
+import re
 
 import httpx
 
+from app.core import http
 from app.core.config import get_settings
 from app.models.nutrients import Nutrients
 
@@ -40,16 +42,22 @@ FIELD_MAP: dict[str, tuple[str, float]] = {
 }
 
 
+BARCODE = re.compile(r"^\d{6,14}$")
+
+
 async def lookup_barcode(barcode: str) -> dict | None:
+    if not BARCODE.match(barcode):
+        return None
     settings = get_settings()
     headers = {"User-Agent": settings.openfoodfacts_user_agent}
     try:
-        async with httpx.AsyncClient(timeout=12.0) as client:
-            response = await client.get(
-                PRODUCT_URL.format(barcode=barcode), headers=headers
-            )
-            response.raise_for_status()
-            payload = response.json()
+        response = await http.client().get(
+            PRODUCT_URL.format(barcode=barcode), headers=headers, timeout=10.0
+        )
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        payload = response.json()
     except (httpx.HTTPError, ValueError) as exc:
         log.warning("Open Food Facts lookup failed for %s: %s", barcode, exc)
         return None
@@ -71,10 +79,18 @@ async def lookup_barcode(barcode: str) -> dict | None:
         return None
 
     serving = product.get("serving_quantity")
+    try:
+        serving_grams = float(serving) if serving else None
+    except (TypeError, ValueError):
+        serving_grams = None
+    if serving_grams is not None and not 0 < serving_grams <= 3000:
+        serving_grams = None
+    serving_text = (product.get("serving_size") or "").strip()
     return {
-        "name": name.strip(),
+        "name": name.strip()[:100],
         "nutrients": Nutrients(**values),
         "barcode": barcode,
-        "serving_grams": float(serving) if serving else None,
+        "serving_grams": serving_grams,
+        "serving_label": f"1 serving ({serving_text})"[:40] if serving_text else None,
         "brand": product.get("brands"),
     }

@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle, Path } from 'react-native-svg';
@@ -25,6 +25,7 @@ const SEGMENTS: { key: Segment; label: string }[] = [
 export default function BodyTab() {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
+  const router = useRouter();
   const [segment, setSegment] = useState<Segment>('weight');
 
   return (
@@ -36,7 +37,22 @@ export default function BodyTab() {
       ]}
       keyboardShouldPersistTaps="handled"
     >
-      <Text variant="h1">Body</Text>
+      <View style={styles.titleRow}>
+        <Text variant="h1">Body</Text>
+        <Pressable
+          onPress={() => router.push('/settings')}
+          hitSlop={10}
+          accessibilityRole="button"
+          accessibilityLabel="Settings"
+          style={({ pressed }) => [
+            styles.settingsButton,
+            { backgroundColor: theme.surfaceSunken },
+            pressed && { opacity: 0.6 },
+          ]}
+        >
+          <Icon name="settings" size={19} color={theme.textSecondary} />
+        </Pressable>
+      </View>
 
       <View style={[styles.segments, { backgroundColor: theme.surfaceSunken }]}>
         {SEGMENTS.map((item) => {
@@ -73,6 +89,8 @@ export default function BodyTab() {
 
 // ------------------------------------------------------------------ weight
 
+const CHART_POINTS = 90;
+
 function WeightSection() {
   const theme = useTheme();
   const queryClient = useQueryClient();
@@ -92,7 +110,10 @@ function WeightSection() {
     },
   });
 
-  const entries = [...(history.data ?? [])].reverse();
+  const entries = useMemo(() => [...(history.data ?? [])].reverse(), [history.data]);
+  // A year of daily weigh-ins is 365 SVG circles redrawn on every keystroke in
+  // the input above; the last 90 tell the story.
+  const chartEntries = useMemo(() => entries.slice(-CHART_POINTS), [entries]);
   const current = entries.at(-1)?.kg ?? profile.data?.profile.start_weight_kg ?? 0;
   const start = profile.data?.profile.start_weight_kg ?? current;
   const goal = profile.data?.profile.goal_weight_kg ?? current;
@@ -173,9 +194,9 @@ function WeightSection() {
       {entries.length >= 2 ? (
         <Card>
           <Text variant="caption" tone="muted" style={{ marginBottom: spacing.md }}>
-            Trend · last {entries.length} entries
+            Trend · last {chartEntries.length} entries
           </Text>
-          <WeightChart entries={entries} goal={goal} />
+          <WeightChart entries={chartEntries} goal={goal} />
         </Card>
       ) : (
         <Card variant="tinted">
@@ -344,46 +365,114 @@ function CompositionSection() {
 
 // ------------------------------------------------------------------ focus
 
+type MapKind = 'fat' | 'focus';
+type Marks = Record<string, number>;
+type SaveJob = { kind: MapKind; marks: Marks; seq: number };
+
+/** Taps cycle a zone 1 → 2 → 3 → off; wait for her to finish before saving. */
+const SAVE_DEBOUNCE_MS = 600;
+
+function toZones(marks: Marks) {
+  return Object.entries(marks).map(([zone, intensity]) => ({
+    zone: zone as BodyZone,
+    intensity,
+  }));
+}
+
 function FocusSection() {
   const theme = useTheme();
   const queryClient = useQueryClient();
-  const [kind, setKind] = useState<'fat' | 'focus'>('fat');
+  const [kind, setKind] = useState<MapKind>('fat');
   const [view, setView] = useState<View3D>('back');
-  const [marks, setMarks] = useState<Record<string, number>>({});
+  // Per kind, so flipping between the two maps mid-edit shows each one's own
+  // unsaved taps rather than whichever the server last returned.
+  const [marksByKind, setMarksByKind] = useState<Record<MapKind, Marks>>({ fat: {}, focus: {} });
+  const marks = marksByKind[kind];
+
+  // Refs, not state: these are read inside timers and mutation callbacks that
+  // must see the latest value, and none of them should cause a render.
+  const latest = useRef(marksByKind);
+  const timers = useRef<Record<MapKind, ReturnType<typeof setTimeout> | null>>({
+    fat: null,
+    focus: null,
+  });
+  /** True from the first tap until the save carrying the last tap settles. */
+  const dirty = useRef<Record<MapKind, boolean>>({ fat: false, focus: false });
+  const latestSeq = useRef<Record<MapKind, number>>({ fat: 0, focus: 0 });
+  const seq = useRef(0);
 
   const map = useQuery({
     queryKey: ['body-map', kind],
     queryFn: () => bodyApi.getMap(kind),
   });
 
-  // Reload local marks whenever the stored map for this kind arrives.
+  // Seed local marks from the server — but never over taps that haven't been
+  // saved yet, or a refetch landing mid-edit would undo them.
   useEffect(() => {
+    if (dirty.current[kind] || map.data === undefined) return;
     const zones = map.data?.zones ?? [];
-    setMarks(Object.fromEntries(zones.map((z) => [z.zone, z.intensity])));
+    const seeded: Marks = Object.fromEntries(zones.map((z) => [z.zone, z.intensity]));
+    const next = { ...latest.current, [kind]: seeded };
+    latest.current = next;
+    setMarksByKind(next);
   }, [map.data, kind]);
 
   const save = useMutation({
-    mutationFn: (next: Record<string, number>) =>
-      bodyApi.putMap(
-        kind,
-        Object.entries(next).map(([zone, intensity]) => ({
-          zone: zone as BodyZone,
-          intensity,
-        })),
-      ),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['body-map', kind] }),
+    // One at a time, in order: two PUTs racing could land the older one last.
+    scope: { id: 'body-map' },
+    mutationFn: (job: SaveJob) => bodyApi.putMap(job.kind, toZones(job.marks)),
+    onSettled: (data, error, job) => {
+      // A newer save for this kind is queued or already sent; let it decide.
+      if (job.seq !== latestSeq.current[job.kind] || timers.current[job.kind]) return;
+      dirty.current[job.kind] = false;
+      if (data && !error) queryClient.setQueryData(['body-map', job.kind], data);
+      else queryClient.invalidateQueries({ queryKey: ['body-map', job.kind] });
+    },
   });
 
+  function flush(target: MapKind) {
+    timers.current[target] = null;
+    seq.current += 1;
+    latestSeq.current[target] = seq.current;
+    save.mutate({ kind: target, marks: latest.current[target], seq: seq.current });
+  }
+
+  // Leaving the tab mid-debounce still saves the last taps.
+  const flushRef = useRef(flush);
+  flushRef.current = flush;
+  useEffect(
+    () => () => {
+      (['fat', 'focus'] as const).forEach((target) => {
+        const timer = timers.current[target];
+        if (!timer) return;
+        clearTimeout(timer);
+        timers.current[target] = null;
+        bodyApi
+          .putMap(target, toZones(latest.current[target]))
+          .then((data) => queryClient.setQueryData(['body-map', target], data))
+          .catch(() => queryClient.invalidateQueries({ queryKey: ['body-map', target] }));
+      });
+    },
+    [queryClient],
+  );
+
   function toggle(zone: BodyZone) {
-    setMarks((current) => {
-      const level = current[zone] ?? 0;
-      const next = { ...current };
-      // 1 → 2 → 3 → off, so one control sets both "where" and "how much".
-      if (level >= 3) delete next[zone];
-      else next[zone] = level + 1;
-      save.mutate(next);
-      return next;
-    });
+    const current = latest.current[kind];
+    const level = current[zone] ?? 0;
+    const nextMarks = { ...current };
+    // 1 → 2 → 3 → off, so one control sets both "where" and "how much".
+    if (level >= 3) delete nextMarks[zone];
+    else nextMarks[zone] = level + 1;
+
+    const next = { ...latest.current, [kind]: nextMarks };
+    latest.current = next;
+    setMarksByKind(next);
+
+    dirty.current[kind] = true;
+    const target = kind;
+    const pending = timers.current[target];
+    if (pending) clearTimeout(pending);
+    timers.current[target] = setTimeout(() => flushRef.current(target), SAVE_DEBOUNCE_MS);
   }
 
   const tint = kind === 'fat' ? semantic.warning : theme.primary;
@@ -487,6 +576,14 @@ function FocusSection() {
 }
 
 const styles = StyleSheet.create({
+  titleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  settingsButton: {
+    width: 36,
+    height: 36,
+    borderRadius: radius.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   page: { paddingHorizontal: spacing.base, gap: spacing.md },
   segments: { flexDirection: 'row', borderRadius: radius.md, padding: 3, gap: 3 },
   segment: {

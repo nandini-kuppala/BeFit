@@ -19,7 +19,8 @@ so that, among equally covered names, the closer one wins.
 """
 
 import re
-from difflib import SequenceMatcher
+
+from rapidfuzz.distance import Indel
 
 # Words that carry no distinguishing meaning in a food name. Dropping them stops
 # "boiled egg" from matching every boiled thing on the strength of "boiled".
@@ -34,6 +35,9 @@ _SPACE = re.compile(r"\s+")
 # A token pair this close counts as the same word — enough for "sed"/"seeds"
 # and "chiken"/"chicken", tight enough that "sesame"/"pumpkin" stays a miss.
 TOKEN_MATCH = 0.70
+
+# Multiplier for non-exact matches found through an alias.
+ALIAS_DISCOUNT = 0.92
 
 # Show it in search results.
 SEARCH_FLOOR = 0.55
@@ -55,7 +59,10 @@ def tokens(text: str) -> list[str]:
 
 
 def _ratio(a: str, b: str) -> float:
-    return SequenceMatcher(None, a, b).ratio()
+    # Same measure difflib's SequenceMatcher.ratio() approximates (2*M/T), in
+    # C. difflib cost ~1 ms per pair, which across a thousand candidates was
+    # most of a search request.
+    return Indel.normalized_similarity(a, b)
 
 
 def _singular(word: str) -> str:
@@ -102,7 +109,7 @@ def score(query: str, name: str, aliases: list[str] | None = None) -> float:
     best = 0.0
     q_tokens = tokens(q)
 
-    for candidate in candidates:
+    for index, candidate in enumerate(candidates):
         c = normalise(candidate)
         if not c:
             continue
@@ -113,9 +120,21 @@ def score(query: str, name: str, aliases: list[str] | None = None) -> float:
         whole = _ratio(q, c)
         combined = 0.75 * coverage + 0.25 * whole
 
-        # A clean prefix is a strong signal: "chick" -> "Chickpea curry".
-        if c.startswith(q) or q.startswith(c):
-            combined = max(combined, 0.85 + 0.15 * whole)
+        # The name typed so far is a prefix of this one: search-as-you-type.
+        # Ending on a word boundary ("chicken" -> "Chicken curry") is a strong
+        # signal; stopping mid-word ("egg" -> "Eggplant", "dal" -> "Dalia") is
+        # a weak one, kept only for when nothing better exists. The reverse
+        # direction (query longer than the name: "paneer" vs "pan") is not a
+        # prefix match at all.
+        if c.startswith(q):
+            boundary = len(c) == len(q) or not c[len(q)].isalnum()
+            prefix = (0.85 if boundary else 0.68) + 0.15 * whole
+            combined = max(combined, prefix)
+
+        # Aliases include regional names from IFCT ("Tindli", "Pan"); a fuzzy
+        # hit on one of those is weaker evidence than a hit on the name itself.
+        if index > 0:
+            combined *= ALIAS_DISCOUNT
 
         best = max(best, combined)
 

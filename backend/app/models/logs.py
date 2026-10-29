@@ -20,16 +20,22 @@ MEAL_ORDER: tuple[Meal, ...] = (
 
 
 class LoggedFood(BaseModel):
+    # Items are edited and deleted by this id. Addressing them by list position
+    # deleted the wrong item whenever the list changed underneath the client.
+    id: PydanticObjectId = Field(default_factory=PydanticObjectId)
     food_id: PydanticObjectId | None = None
     name: str
     quantity: float = 1.0
     unit: str = "serving"
+    # Canonical portion key ("piece", "katori", "g"…) the quantity counts.
+    portion_key: str | None = None
     grams: float
     # Resolved at log time and frozen. If the underlying food is later
     # corrected, history stays as it was actually eaten and counted.
     nutrients: Nutrients
     source: FoodSource
     confidence: Confidence
+    added_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class FoodLog(Document):
@@ -49,9 +55,19 @@ class FoodLog(Document):
     class Settings:
         name = "food_logs"
         indexes = [
+            # One document per meal per day. Without the constraint, two quick
+            # taps created two "lunch" logs; the day total counted both while
+            # the meal list showed one.
             pymongo.IndexModel(
-                [("user_id", pymongo.ASCENDING), ("date", pymongo.DESCENDING)]
+                [
+                    ("user_id", pymongo.ASCENDING),
+                    ("date", pymongo.DESCENDING),
+                    ("meal", pymongo.ASCENDING),
+                ],
+                unique=True,
+                name="user_date_meal_unique",
             ),
+            pymongo.IndexModel([("user_id", pymongo.ASCENDING), ("items.food_id", pymongo.ASCENDING)]),
         ]
 
 
